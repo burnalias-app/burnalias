@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "IBM Plex Sans", "Segoe UI", sans-serif;
+  --font-serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html {
+    @apply bg-[#07090d];
+  }
+
+  body {
+    @apply min-h-screen bg-[radial-gradient(circle_at_50%_12%,rgba(215,169,104,0.18),transparent_18%),radial-gradient(circle_at_50%_12%,rgba(255,255,255,0.06),transparent_30%),linear-gradient(180deg,#0d1117_0%,#07090d_100%)] text-slate-100 antialiased;
+    background-image:
+      radial-gradient(circle at 50% 12%, rgba(215, 169, 104, 0.18), transparent 18%),
+      radial-gradient(circle at 50% 12%, rgba(255, 255, 255, 0.06), transparent 30%),
+      linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+      linear-gradient(180deg, #0d1117 0%, #07090d 100%);
+    background-size: auto, auto, 28px 28px, 28px 28px, auto;
+    background-position: center top, center top, center top, center top, center top;
+  }
+
+  button {
+    @apply cursor-pointer;
+  }
+
+  input,
+  select,
+  button {
+    font: inherit;
+  }
+
+  #root {
+    @apply min-h-screen;
+  }
+}

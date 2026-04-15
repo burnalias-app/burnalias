@@ -1,0 +1,24 @@
+{
+  "name": "burnalias",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "yarn@4.9.2",
+  "workspaces": [
+    "apps/server",
+    "apps/web"
+  ],
+  "scripts": {
+    "auth:generate": "yarn workspace @burnalias/server auth:generate",
+    "dev": "npm-run-all --parallel dev:server dev:web",
+    "dev:server": "yarn workspace @burnalias/server dev",
+    "dev:web": "yarn workspace @burnalias/web dev",
+    "build": "yarn build:server && yarn build:web",
+    "build:server": "yarn workspace @burnalias/server build",
+    "build:web": "yarn workspace @burnalias/web build",
+    "test:server": "yarn build:server && yarn workspace @burnalias/server test",
+    "start": "yarn workspace @burnalias/server start"
+  },
+  "devDependencies": {
+    "npm-run-all": "^4.1.5"
+  }
+}
