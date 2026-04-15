@@ -7,12 +7,15 @@ dist/
 # TypeScript incremental build cache
 *.tsbuildinfo
 
-# Environment — never commit secrets
+# Environment - never commit secrets
 .env
 .env.*
 !.env.example
 
-# Database — runtime data, mount as a Docker volume
+# Database - runtime data, mount as a Docker volume
+burnalias.db
+burnalias.db-shm
+burnalias.db-wal
 data/*.db
 data/*.db-shm
 data/*.db-wal
