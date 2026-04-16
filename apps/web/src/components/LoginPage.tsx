@@ -21,7 +21,7 @@ export function LoginPage({ loginError, loginSubmitting, onLogin }: LoginPagePro
   }
 
   return (
-    <main className="mx-auto grid min-h-screen w-full max-w-6xl gap-6 px-4 py-8 sm:px-6 lg:grid-cols-[1.2fr_0.8fr] lg:items-center">
+    <main className="mx-auto box-border grid min-h-screen w-full max-w-6xl gap-6 px-4 py-8 sm:px-6 lg:grid-cols-[1.2fr_0.8fr] lg:items-center">
       <section className="py-4">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#d7a968]">BurnAlias</p>
         <h1 className="mt-4 max-w-xl font-serif text-4xl leading-none text-white sm:text-5xl lg:text-6xl">

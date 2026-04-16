@@ -1,8 +1,7 @@
 import { logger } from "../lib/logger";
 import { ConfiguredProvider } from "./providerConfig";
-import { MockAliasProvider } from "./mockProvider";
 import { SimpleLoginProvider } from "./simpleLoginProvider";
-import { AliasProvider, ConnectionTestResult } from "./provider";
+import { AliasPreviewResult, AliasProvider, ConnectionTestResult, ForwardTarget } from "./provider";
 import { SupportedProviderDefinition, supportedProviders, ProviderType } from "./providerCatalog";
 
 const log = logger.child({ module: "providerRegistry" });
@@ -10,23 +9,14 @@ const log = logger.child({ module: "providerRegistry" });
 export class ProviderRegistry {
   private readonly providers = new Map<ProviderType, AliasProvider>();
 
-  constructor() {
-    this.providers.set("mock", new MockAliasProvider());
-  }
-
   /**
-   * Rebuild real-provider entries from persisted settings.
+   * Rebuild provider entries from persisted settings.
    * Call on startup and after every settings save.
    */
   reconfigure(configuredProviders: ConfiguredProvider[]): void {
-    // Clear all non-mock providers before rebuilding
-    for (const type of ["simplelogin", "addy", "cloudflare"] as ProviderType[]) {
-      this.providers.delete(type);
-    }
+    this.providers.clear();
 
     for (const config of configuredProviders) {
-      if (!config.enabled) continue;
-
       if (config.type === "simplelogin" && config.config.apiKey) {
         this.providers.set("simplelogin", new SimpleLoginProvider(config.config.apiKey));
         log.info({ provider: "simplelogin" }, "Provider registered");
@@ -40,9 +30,6 @@ export class ProviderRegistry {
    */
   async testConnection(type: ProviderType, config: Record<string, string>): Promise<ConnectionTestResult> {
     switch (type) {
-      case "mock":
-        return { success: true, message: "Mock provider — no external connection needed." };
-
       case "simplelogin": {
         if (!config.apiKey) {
           return { success: false, message: "API key is required." };
@@ -62,6 +49,23 @@ export class ProviderRegistry {
       return (await provider?.getFirstSuffix()) ?? null;
     }
     return null;
+  }
+
+  async getAliasPreview(type: ProviderType): Promise<AliasPreviewResult | null> {
+    if (type === "simplelogin") {
+      const provider = this.providers.get("simplelogin") as SimpleLoginProvider | undefined;
+      return (await provider?.getAliasPreview()) ?? null;
+    }
+    return null;
+  }
+
+  async getForwardTargets(type: ProviderType): Promise<ForwardTarget[]> {
+    const provider = this.providers.get(type);
+    if (!provider) {
+      return [];
+    }
+
+    return provider.listForwardTargets();
   }
 
   getProvider(type: string): AliasProvider {

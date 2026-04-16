@@ -1,5 +1,11 @@
 import { FormEvent } from "react";
-import { ConfiguredProvider, ProviderType, SupportedProviderDefinition } from "../api";
+import {
+  Alias,
+  ConfiguredProvider,
+  ForwardAddressSource,
+  ProviderType,
+  SupportedProviderDefinition
+} from "../api";
 import { fieldClassName, panelClassName } from "../lib/utils";
 import { ProviderCard } from "./ProviderCard";
 
@@ -7,46 +13,59 @@ export type SettingsFormState = {
   providers: ConfiguredProvider[];
   activeProviderId: string | null;
   forwardAddressesText: string;
+  historyRetentionDays: string;
 };
 
 type SettingsViewProps = {
   settingsForm: SettingsFormState;
+  aliases: Alias[];
   supportedProviders: SupportedProviderDefinition[];
   settingsError: string | null;
   settingsSubmitting: boolean;
+  activeForwardAddressSource: ForwardAddressSource;
+  activeForwardAddresses: string[];
+  activeForwardAddressProviderName: string | null;
   onSubmit: (event: FormEvent) => Promise<void>;
   onAddProvider: (type: ProviderType) => void;
   onRemoveProvider: (providerId: string) => void;
   onSetActive: (providerId: string) => void;
-  onToggleEnabled: (providerId: string, enabled: boolean) => void;
   onRenameProvider: (providerId: string, name: string) => void;
-  onMockDomainChange: (providerId: string, aliasDomain: string) => void;
   onApiKeyChange: (providerId: string, apiKey: string) => void;
+  onClearApiKey: (providerId: string) => void;
+  onConnectionTestSuccess: (providerId: string, testedAt: string, verificationToken: string) => void;
   onForwardTextChange: (value: string) => void;
+  onHistoryRetentionDaysChange: (value: string) => void;
 };
 
 export function SettingsView({
   settingsForm,
+  aliases,
   supportedProviders,
   settingsError,
   settingsSubmitting,
+  activeForwardAddressSource,
+  activeForwardAddresses,
+  activeForwardAddressProviderName,
   onSubmit,
   onAddProvider,
   onRemoveProvider,
   onSetActive,
-  onToggleEnabled,
   onRenameProvider,
-  onMockDomainChange,
   onApiKeyChange,
-  onForwardTextChange
+  onClearApiKey,
+  onConnectionTestSuccess,
+  onForwardTextChange,
+  onHistoryRetentionDaysChange
 }: SettingsViewProps) {
   const activeProviderName =
     settingsForm.providers.find((p) => p.id === settingsForm.activeProviderId)?.name ?? "None selected";
 
-  const activeProviderDomain = (() => {
-    const selected = settingsForm.providers.find((p) => p.id === settingsForm.activeProviderId);
-    return selected?.type === "mock" ? selected.config.aliasDomain : "Defined by the provider integration";
-  })();
+  function isProviderReady(provider: ConfiguredProvider): boolean {
+    if (provider.type === "simplelogin") {
+      return Boolean(provider.config.hasStoredSecret) && Boolean(provider.config.lastConnectionTestSucceededAt);
+    }
+    return false;
+  }
 
   return (
     <section className={panelClassName("p-5 sm:p-6")}>
@@ -90,19 +109,46 @@ export function SettingsView({
                 </div>
               ) : (
                 settingsForm.providers.map((provider) => (
-                  <ProviderCard
-                    key={provider.id}
-                    provider={provider}
-                    isActive={settingsForm.activeProviderId === provider.id}
-                    meta={supportedProviders.find((item) => item.type === provider.type)}
-                    supportedProviders={supportedProviders}
-                    onSetActive={onSetActive}
-                    onRemove={onRemoveProvider}
-                    onRename={onRenameProvider}
-                    onToggleEnabled={onToggleEnabled}
-                    onMockDomainChange={onMockDomainChange}
-                    onApiKeyChange={onApiKeyChange}
-                  />
+                  (() => {
+                    const isActive = settingsForm.activeProviderId === provider.id;
+                    const hasAliases = aliases.some(
+                      (alias) =>
+                        alias.providerName === provider.type &&
+                        alias.status !== "expired" &&
+                        alias.status !== "deleted"
+                    );
+                    const anotherReadyProvider = settingsForm.providers.find(
+                      (candidate) => candidate.id !== provider.id && isProviderReady(candidate)
+                    );
+                    const removeDisabledReason = hasAliases
+                      ? "This provider cannot be removed while active or inactive aliases are still tied to it."
+                      : !anotherReadyProvider
+                        ? "Configure and set another tested provider as active before removing this one."
+                        : isActive && settingsForm.activeProviderId !== anotherReadyProvider.id
+                          ? "Set another tested provider active before removing the current one."
+                          : null;
+                    const canRemove = !removeDisabledReason;
+                    const canSetActive = isProviderReady(provider) && (supportedProviders.find((item) => item.type === provider.type)?.implemented ?? false);
+
+                    return (
+                      <ProviderCard
+                        key={provider.id}
+                        provider={provider}
+                        isActive={isActive}
+                        meta={supportedProviders.find((item) => item.type === provider.type)}
+                        supportedProviders={supportedProviders}
+                        canSetActive={canSetActive}
+                        canRemove={canRemove}
+                        removeDisabledReason={removeDisabledReason}
+                        onSetActive={onSetActive}
+                        onRemove={onRemoveProvider}
+                        onRename={onRenameProvider}
+                        onApiKeyChange={onApiKeyChange}
+                        onClearApiKey={onClearApiKey}
+                        onConnectionTestSuccess={onConnectionTestSuccess}
+                      />
+                    );
+                  })()
                 ))
               )}
             </div>
@@ -113,37 +159,78 @@ export function SettingsView({
             <section className={panelClassName("p-5")}>
               <h3 className="font-serif text-xl text-white">Forward targets</h3>
               <p className="mt-2 text-sm leading-6 text-slate-300">
-                These addresses appear in the alias composer when you choose where an alias should forward mail.
+                The alias composer now prefers verified destinations from the active provider when they are available.
               </p>
               <div className="mt-5 grid gap-4">
+                <div className="rounded-[1.1rem] border border-white/10 bg-[#141b24]/85 px-4 py-4">
+                  <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                    {activeForwardAddressSource === "provider" ? "Active provider targets" : "Composer source"}
+                  </span>
+                  <p className="mt-2 text-sm leading-6 text-slate-300">
+                    {activeForwardAddressSource === "provider"
+                      ? `Using verified forward targets from ${activeForwardAddressProviderName ?? "the active provider"}.`
+                      : activeForwardAddressSource === "settings"
+                        ? "The active provider does not expose forward targets yet, so BurnAlias is using the fallback list below."
+                        : "No forward targets are currently available."}
+                  </p>
+                  {activeForwardAddresses.length > 0 ? (
+                    <ul className="mt-3 grid gap-2">
+                      {activeForwardAddresses.map((address) => (
+                        <li
+                          key={address}
+                          className="rounded-[0.95rem] border border-white/8 bg-[#111820]/80 px-3 py-2 text-sm text-slate-100 break-words"
+                        >
+                          {address}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-3 text-sm text-slate-400">No forward targets returned.</p>
+                  )}
+                </div>
                 <label className="grid gap-2">
-                  <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Forward-to addresses</span>
+                  <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Fallback forward-to addresses</span>
                   <textarea
                     className={`${fieldClassName()} min-h-52 resize-y`}
                     value={settingsForm.forwardAddressesText}
                     onChange={(e) => onForwardTextChange(e.target.value)}
                     placeholder={"me@example.com\nwork@example.com"}
-                    required
                   />
                 </label>
                 <p className="text-sm leading-6 text-slate-400">
-                  One email per line. These become the dropdown choices in the alias composer.
+                  One email per line. BurnAlias only uses this list when the active provider cannot supply verified forward targets itself.
                 </p>
               </div>
             </section>
 
             <section className={panelClassName("p-5")}>
-              <h3 className="font-serif text-xl text-white">Current selection</h3>
-              <dl className="mt-4 grid gap-4">
-                <div>
-                  <dt className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Active provider</dt>
-                  <dd className="mt-1 text-sm text-slate-200">{activeProviderName}</dd>
-                </div>
-                <div>
-                  <dt className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Provider domain</dt>
-                  <dd className="mt-1 wrap-break-word text-sm text-slate-200">{activeProviderDomain}</dd>
-                </div>
-              </dl>
+              <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Active provider</span>
+              <p className="mt-2 text-lg text-white">{activeProviderName}</p>
+            </section>
+
+            <section className={panelClassName("p-5")}>
+              <h3 className="font-serif text-xl text-white">History retention</h3>
+              <p className="mt-2 text-sm leading-6 text-slate-300">
+                Expired and deleted aliases stay in BurnAlias for history, then are purged automatically.
+              </p>
+              <div className="mt-5 grid gap-2">
+                <label className="grid gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Purge terminal aliases after</span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      className={`${fieldClassName()} min-w-0`}
+                      type="number"
+                      min="1"
+                      step="1"
+                      inputMode="numeric"
+                      value={settingsForm.historyRetentionDays}
+                      onChange={(e) => onHistoryRetentionDaysChange(e.target.value)}
+                      required
+                    />
+                    <span className="text-sm text-slate-300">days</span>
+                  </div>
+                </label>
+              </div>
             </section>
           </section>
         </div>

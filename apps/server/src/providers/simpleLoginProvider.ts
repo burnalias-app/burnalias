@@ -1,6 +1,12 @@
 import { ProviderAlias } from "../domain/alias";
 import { logger } from "../lib/logger";
-import { AliasProvider, ConnectionTestResult, CreateProviderAliasInput } from "./provider";
+import {
+  AliasPreviewResult,
+  AliasProvider,
+  ConnectionTestResult,
+  CreateProviderAliasInput,
+  ForwardTarget
+} from "./provider";
 
 const BASE_URL = "https://api.simplelogin.io";
 
@@ -86,22 +92,38 @@ export class SimpleLoginProvider implements AliasProvider {
     }
   }
 
+  async listForwardTargets(): Promise<ForwardTarget[]> {
+    const { mailboxes } = await this.listMailboxes();
+    return mailboxes.map((mailbox) => ({
+      email: mailbox.email,
+      isDefault: mailbox.default
+    }));
+  }
+
   async getFirstSuffix(): Promise<string | null> {
     try {
-      const options = await this.slFetch<SlAliasOptions>("/api/v5/alias/options");
-      return options.suffixes[0]?.suffix ?? null;
+      const preview = await this.getAliasPreview();
+      return preview?.displaySuffix ?? null;
     } catch {
       return null;
     }
   }
 
-  async createAlias(input: CreateProviderAliasInput): Promise<ProviderAlias> {
+  async getAliasPreview(): Promise<AliasPreviewResult | null> {
     const options = await this.slFetch<SlAliasOptions>("/api/v5/alias/options");
-    if (!options.suffixes.length) {
-      throw new Error("No alias domains are available on your SimpleLogin account.");
+    const suffix = options.suffixes[0];
+    if (!suffix) {
+      return null;
     }
 
-    const { mailboxes } = await this.slFetch<SlMailboxList>("/api/v2/mailboxes");
+    return {
+      displaySuffix: suffix.suffix,
+      providerHint: suffix.signed_suffix
+    };
+  }
+
+  async createAlias(input: CreateProviderAliasInput): Promise<ProviderAlias> {
+    const { mailboxes } = await this.listMailboxes();
     const selectedMailbox = input.destinationEmail
       ? mailboxes.find((mailbox) => mailbox.email.toLowerCase() === input.destinationEmail?.toLowerCase())
       : mailboxes.find((mailbox) => mailbox.default) ?? mailboxes[0];
@@ -116,15 +138,20 @@ export class SimpleLoginProvider implements AliasProvider {
       );
     }
 
-    const suffix = options.suffixes[0];
-    if (!suffix) {
+    const preview = input.providerHint
+      ? {
+          providerHint: input.providerHint,
+          displaySuffix: "reserved"
+        }
+      : await this.getAliasPreview();
+    if (!preview) {
       throw new Error("No usable alias suffix is available on your SimpleLogin account.");
     }
 
     log.debug(
       {
         localPart: input.localPart,
-        suffix: suffix.suffix,
+        suffix: preview.displaySuffix,
         mailboxId: selectedMailbox.id,
         mailboxEmail: selectedMailbox.email
       },
@@ -135,9 +162,9 @@ export class SimpleLoginProvider implements AliasProvider {
       method: "POST",
       body: JSON.stringify({
         alias_prefix: input.localPart,
-        signed_suffix: suffix.signed_suffix,
+        signed_suffix: preview.providerHint,
         mailbox_ids: [selectedMailbox.id],
-        note: input.label ?? null
+        note: input.note ?? input.label ?? null
       })
     });
 
@@ -180,5 +207,9 @@ export class SimpleLoginProvider implements AliasProvider {
     await this.slFetch(`/api/aliases/${providerAliasId}/toggle`, {
       method: "POST"
     });
+  }
+
+  private async listMailboxes(): Promise<SlMailboxList> {
+    return this.slFetch<SlMailboxList>("/api/v2/mailboxes");
   }
 }

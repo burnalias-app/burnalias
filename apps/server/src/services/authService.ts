@@ -8,7 +8,7 @@ export class AuthService {
   validateConfig(): void {
     if (!config.authUsername || !config.authPasswordHash || !config.sessionSecret) {
       throw new Error(
-        "BurnAlias auth is not configured. Set BURN_USER and BURN_PASSWORD_HASH before starting the app."
+        "BurnAlias auth is not configured. Set BURN_USER and BURN_PASSWORD_HASH before starting the app. The server checks .env in the repo root and apps/server."
       );
     }
   }

@@ -1,4 +1,4 @@
-export type AliasStatus = "active" | "disabled" | "expired";
+export type AliasStatus = "active" | "inactive" | "expired" | "deleted";
 
 export interface Alias {
   id: string;

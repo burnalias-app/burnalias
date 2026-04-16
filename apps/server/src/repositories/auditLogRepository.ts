@@ -46,4 +46,13 @@ export class AuditLogRepository {
       `)
       .all(aliasId) as AuditLog[];
   }
+
+  deleteForAlias(aliasId: string): void {
+    this.db
+      .prepare(`
+        DELETE FROM audit_logs
+        WHERE alias_id = ?
+      `)
+      .run(aliasId);
+  }
 }

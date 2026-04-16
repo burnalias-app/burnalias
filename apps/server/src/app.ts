@@ -10,6 +10,7 @@ import { requireCsrfForStateChanges } from "./http/csrfMiddleware";
 import { ProviderRegistry } from "./providers/providerRegistry";
 import { AliasRepository } from "./repositories/aliasRepository";
 import { AuditLogRepository } from "./repositories/auditLogRepository";
+import { SchedulerJobRepository } from "./repositories/schedulerJobRepository";
 import { SessionRepository } from "./repositories/sessionRepository";
 import { createAliasRouter } from "./routes/aliases";
 import { createAuthRouter } from "./routes/auth";
@@ -24,23 +25,30 @@ export function createApp() {
   const providerRegistry = new ProviderRegistry();
   const aliasRepository = new AliasRepository(db);
   const auditLogRepository = new AuditLogRepository(db);
+  const schedulerJobRepository = new SchedulerJobRepository(db);
   const sessionRepository = new SessionRepository(db);
   const settingsService = new SettingsService(
     db,
     config.authUsername,
     config.sessionTtlMs,
-    providerRegistry.listSupportedProviders()
+    providerRegistry.listSupportedProviders(),
+    aliasRepository,
+    auditLogRepository
   );
   // Restore any real providers that were configured before the server started
-  providerRegistry.reconfigure(settingsService.getSettings().providerSettings.providers);
+  providerRegistry.reconfigure(settingsService.getInternalSettings().providerSettings.providers);
 
   const aliasService = new AliasService(aliasRepository, auditLogRepository, providerRegistry, settingsService);
   const authService = new AuthService(sessionRepository);
   const scheduler = new ExpirationScheduler(
     aliasRepository,
     auditLogRepository,
+    schedulerJobRepository,
     providerRegistry,
-    config.expirationCheckIntervalMs
+    settingsService,
+    config.expirationCheckIntervalMs,
+    config.historyPurgeIntervalMs,
+    config.providerSyncIntervalMs
   );
 
   const app = express();
@@ -51,9 +59,10 @@ export function createApp() {
       autoLogging: {
         ignore: (req) => req.url === "/api/health"
       },
-      customLogLevel: (_req, res, err) => {
+      customLogLevel: (req, res, err) => {
         if (err || res.statusCode >= 500) return "error";
         if (res.statusCode >= 400) return "warn";
+        if (req.method === "GET") return "trace";
         return "info";
       }
     })
@@ -75,8 +84,8 @@ export function createApp() {
   app.get("/api/health", (_req, res) => res.json({ ok: true }));
   app.use("/api", requireAuth(authService));
   app.use("/api", requireCsrfForStateChanges);
-  app.use("/api/aliases", createAliasRouter(aliasService));
-  app.use("/api", createMetaRouter(providerRegistry, settingsService));
+  app.use("/api/aliases", createAliasRouter(aliasService, scheduler));
+  app.use("/api", createMetaRouter(providerRegistry, settingsService, scheduler));
 
   const webDistPath = path.resolve(__dirname, "..", "..", "web", "dist");
   app.use(express.static(webDistPath));

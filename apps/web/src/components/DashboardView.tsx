@@ -1,4 +1,5 @@
 import { Dispatch, FormEvent, SetStateAction } from "react";
+import { ForwardAddressSource } from "../api";
 import { Alias, AliasStatus, ConfiguredProvider, SupportedProviderDefinition } from "../api";
 import { fieldClassName, panelClassName, randomAliasName } from "../lib/utils";
 import { AliasCard } from "./AliasCard";
@@ -13,17 +14,20 @@ export type AliasFormState = {
   label: string;
 };
 
-const filterOptions: Filter[] = ["all", "active", "disabled", "expired"];
+const filterOptions: Filter[] = ["all", "active", "inactive", "expired", "deleted"];
 
 type DashboardViewProps = {
   aliases: Alias[];
+  configuredProviderTypes: string[];
   filter: Filter;
   error: string | null;
   loading: boolean;
+  syncSubmitting: boolean;
   form: AliasFormState;
   activeProvider: ConfiguredProvider | null;
   activeProviderMeta: SupportedProviderDefinition | null;
   forwardAddresses: string[];
+  forwardAddressSource: ForwardAddressSource;
   aliasPreview: string;
   createDisabledReason: string | null;
   submitting: boolean;
@@ -32,17 +36,22 @@ type DashboardViewProps = {
   onSubmit: (event: FormEvent) => Promise<void>;
   onToggle: (alias: Alias) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  onUpdateExpiration: (id: string, expiresInHours: number | null) => Promise<void>;
+  onSync: () => Promise<void>;
 };
 
 export function DashboardView({
   aliases,
+  configuredProviderTypes,
   filter,
   error,
   loading,
+  syncSubmitting,
   form,
   activeProvider,
   activeProviderMeta,
   forwardAddresses,
+  forwardAddressSource,
   aliasPreview,
   createDisabledReason,
   submitting,
@@ -50,14 +59,19 @@ export function DashboardView({
   onFilterChange,
   onSubmit,
   onToggle,
-  onDelete
+  onDelete,
+  onUpdateExpiration,
+  onSync
 }: DashboardViewProps) {
+  const refreshIconClassName = syncSubmitting ? "animate-spin" : "";
+  const configuredProviderTypeSet = new Set(configuredProviderTypes);
+
   return (
-    <div className="grid gap-5">
+    <div className="grid min-w-0 gap-5">
       {/* Create alias */}
       <section className={panelClassName("p-5 sm:p-6")}>
         <div className="mb-6 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-          <div>
+          <div className="min-w-0">
             <h2 className="font-serif text-2xl text-white sm:text-3xl">Create alias</h2>
             <p className="mt-2 text-sm leading-6 text-slate-300">
               Generate a one-word alias name, choose where it forwards, and set how long it should stay active (minimum 1 hour).
@@ -65,7 +79,7 @@ export function DashboardView({
           </div>
           <button
             type="button"
-            className="rounded-[1.1rem] border border-white/10 bg-[#141b24]/88 px-4 py-3 text-sm font-medium text-white transition hover:bg-[#1b2430]"
+            className="w-full rounded-[1.1rem] border border-white/10 bg-[#141b24]/88 px-4 py-3 text-sm font-medium text-white transition hover:bg-[#1b2430] sm:w-auto"
             onClick={() => onFormChange((cur) => ({ ...cur, localPart: randomAliasName() }))}
           >
             Regenerate name
@@ -73,7 +87,7 @@ export function DashboardView({
         </div>
 
         <form className="grid gap-5" onSubmit={onSubmit}>
-          <div className="grid gap-4 xl:grid-cols-3">
+          <div className="grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-3">
             <label className="grid gap-2">
               <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Alias name</span>
               <input
@@ -101,9 +115,9 @@ export function DashboardView({
                 ))}
               </select>
             </label>
-            <div className="grid gap-2">
+            <div className="grid min-w-0 gap-2 md:col-span-2 xl:col-span-1">
               <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Expires in</span>
-              <div className="flex gap-2">
+              <div className="grid grid-cols-[minmax(0,1fr)_6.5rem] gap-2">
                 <input
                   className={`${fieldClassName()} min-w-0`}
                   type="number"
@@ -126,15 +140,15 @@ export function DashboardView({
             </div>
           </div>
 
-          <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
-            <section className={panelClassName("p-5")}>
+          <div className="grid min-w-0 gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+            <section className={panelClassName("min-w-0 p-4 sm:p-5")}>
               <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Generated alias</span>
-              <p className="mt-3 wrap-break-word font-mono text-lg text-white">{aliasPreview}</p>
+              <p className="mt-3 wrap-break-word font-mono text-base text-white sm:text-lg">{aliasPreview}</p>
               <p className="mt-3 text-sm leading-6 text-slate-400">
                 BurnAlias builds the full alias using the active provider domain, then starts the expiration countdown from the moment the alias is created.
               </p>
             </section>
-            <section className={panelClassName("p-5")}>
+            <section className={panelClassName("min-w-0 p-4 sm:p-5")}>
               <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Active provider</span>
               <p className="mt-3 text-lg text-white">{activeProvider?.name ?? "No active provider"}</p>
               <p className="mt-2 text-sm leading-6 text-slate-300">
@@ -154,11 +168,11 @@ export function DashboardView({
           </label>
 
           <div className="flex flex-col gap-4 border-t border-white/10 pt-4 md:flex-row md:items-center md:justify-between">
-            <p className="text-sm leading-6 text-slate-400">
+            <p className="max-w-2xl text-sm leading-6 text-slate-400">
               {createDisabledReason ?? "The alias name is generated for you, but you can override it before creation. Expiration is measured from the moment the alias is created."}
             </p>
             <button
-              className="rounded-[1.1rem] bg-linear-to-r from-[#c7924a] to-[#e0b777] px-5 py-3 font-semibold text-[#11161d] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+              className="w-full rounded-[1.1rem] bg-linear-to-r from-[#c7924a] to-[#e0b777] px-5 py-3 font-semibold text-[#11161d] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
               type="submit"
               disabled={submitting || !!createDisabledReason}
             >
@@ -169,28 +183,51 @@ export function DashboardView({
       </section>
 
       {/* Alias list */}
-      <section className={panelClassName("p-5 sm:p-6")}>
+      <section className={panelClassName("min-w-0 p-5 sm:p-6")}>
         <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-          <div>
+          <div className="min-w-0">
             <h2 className="font-serif text-2xl text-white sm:text-3xl">Alias dashboard</h2>
             <p className="mt-2 text-sm leading-6 text-slate-300">Filter aliases by lifecycle state and manage them in place.</p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {filterOptions.map((option) => (
+          <div className="flex flex-wrap items-center gap-2">
               <button
-                key={option}
                 type="button"
-                className={[
-                  "rounded-full px-4 py-2 text-sm capitalize transition",
-                  option === filter
-                    ? "bg-[#e7edf5] text-[#121822]"
-                    : "border border-white/10 bg-[#141b24]/88 text-slate-200 hover:bg-[#1b2430]"
-                ].join(" ")}
-                onClick={() => onFilterChange(option)}
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center text-zinc-400 transition hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-45"
+                onClick={() => void onSync()}
+                disabled={syncSubmitting}
+                aria-label={syncSubmitting ? "Refreshing aliases" : "Refresh aliases"}
+                title={syncSubmitting ? "Refreshing aliases" : "Refresh aliases"}
               >
-                {option}
+                <svg
+                  className={`h-5 w-5 ${refreshIconClassName}`}
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.75"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                  <path d="M21 3v6h-6" />
+                </svg>
               </button>
-            ))}
+              {filterOptions.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  className={[
+                    "rounded-full px-4 py-2 text-sm capitalize transition",
+                    option === filter
+                      ? "bg-[#e7edf5] text-[#121822]"
+                      : "border border-white/10 bg-[#141b24]/88 text-slate-200 hover:bg-[#1b2430]"
+                  ].join(" ")}
+                  onClick={() => onFilterChange(option)}
+                >
+                  {option}
+                </button>
+              ))}
           </div>
         </div>
 
@@ -211,7 +248,17 @@ export function DashboardView({
         ) : (
           <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
             {aliases.map((alias) => (
-              <AliasCard key={alias.id} alias={alias} onToggle={onToggle} onDelete={onDelete} />
+              <AliasCard
+                key={alias.id}
+                alias={alias}
+                providerRemovedFromApp={
+                  (alias.status === "expired" || alias.status === "deleted") &&
+                  !configuredProviderTypeSet.has(alias.providerName)
+                }
+                onToggle={onToggle}
+                onDelete={onDelete}
+                onUpdateExpiration={onUpdateExpiration}
+              />
             ))}
           </div>
         )}

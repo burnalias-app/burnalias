@@ -1,4 +1,4 @@
-export type ProviderType = "mock" | "simplelogin" | "addy" | "cloudflare";
+export type ProviderType = "simplelogin" | "addy" | "cloudflare";
 
 export interface SupportedProviderDefinition {
   type: ProviderType;
@@ -8,12 +8,6 @@ export interface SupportedProviderDefinition {
 }
 
 export const supportedProviders: SupportedProviderDefinition[] = [
-  {
-    type: "mock",
-    label: "Mock provider",
-    description: "Local development provider for testing alias flows end-to-end.",
-    implemented: true
-  },
   {
     type: "simplelogin",
     label: "SimpleLogin",

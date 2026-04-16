@@ -1,31 +1,19 @@
 import { z } from "zod";
 
-export const aliasDomainSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(255)
-  .regex(/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/, "Alias domain must look like a valid domain name.");
-
 const providerBaseSchema = {
   id: z.string().trim().min(1),
-  name: z.string().trim().min(1).max(64),
-  enabled: z.boolean()
+  name: z.string().trim().min(1).max(64)
 };
-
-export const mockProviderConfigSchema = z.object({
-  ...providerBaseSchema,
-  type: z.literal("mock"),
-  config: z.object({
-    aliasDomain: aliasDomainSchema
-  })
-});
 
 export const simpleLoginProviderConfigSchema = z.object({
   ...providerBaseSchema,
   type: z.literal("simplelogin"),
   config: z.object({
-    apiKey: z.string().default("")
+    apiKey: z.string().default(""),
+    hasStoredSecret: z.boolean().optional().default(false),
+    clearStoredSecret: z.boolean().optional().default(false),
+    lastConnectionTestSucceededAt: z.string().datetime().nullable().optional().default(null),
+    lastConnectionTestVerificationToken: z.string().min(1).nullable().optional().default(null)
   })
 });
 
@@ -42,7 +30,6 @@ export const cloudflareProviderConfigSchema = z.object({
 });
 
 export const configuredProviderSchema = z.discriminatedUnion("type", [
-  mockProviderConfigSchema,
   simpleLoginProviderConfigSchema,
   addyProviderConfigSchema,
   cloudflareProviderConfigSchema

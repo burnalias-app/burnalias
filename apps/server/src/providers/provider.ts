@@ -5,6 +5,8 @@ export interface CreateProviderAliasInput {
   destinationEmail?: string;
   domainName?: string;
   label?: string | null;
+  note?: string | null;
+  providerHint?: string | null;
 }
 
 export interface ConnectionTestResult {
@@ -12,9 +14,20 @@ export interface ConnectionTestResult {
   message: string;
 }
 
+export interface AliasPreviewResult {
+  displaySuffix: string;
+  providerHint: string;
+}
+
+export interface ForwardTarget {
+  email: string;
+  isDefault: boolean;
+}
+
 export interface AliasProvider {
   readonly name: string;
   testConnection(): Promise<ConnectionTestResult>;
+  listForwardTargets(): Promise<ForwardTarget[]>;
   createAlias(input: CreateProviderAliasInput): Promise<ProviderAlias>;
   disableAlias(providerAliasId: string): Promise<void>;
   enableAlias(providerAliasId: string): Promise<void>;

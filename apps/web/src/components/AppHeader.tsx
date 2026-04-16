@@ -1,7 +1,8 @@
+import { useEffect, useRef } from "react";
 import logo from "../logo.png";
 import { SessionState } from "../api";
 
-type ViewMode = "dashboard" | "settings";
+type ViewMode = "dashboard" | "settings" | "jobs";
 
 type AppHeaderProps = {
   session: SessionState;
@@ -13,6 +14,24 @@ type AppHeaderProps = {
 
 export function AppHeader({ session, accountMenuOpen, onMenuToggle, onNavigate, onLogout }: AppHeaderProps) {
   const initial = (session.user?.username ?? "A").slice(0, 1).toUpperCase();
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!accountMenuOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: MouseEvent) {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        onMenuToggle();
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+    };
+  }, [accountMenuOpen, onMenuToggle]);
 
   return (
     <header className="mb-5 flex flex-col gap-4 sm:mb-6 sm:flex-row sm:items-center sm:justify-between">
@@ -25,7 +44,7 @@ export function AppHeader({ session, accountMenuOpen, onMenuToggle, onNavigate, 
         <p className="text-lg font-semibold uppercase tracking-[0.18em] text-[#d7a968] sm:text-xl">BurnAlias</p>
       </div>
 
-      <div className="relative w-full sm:w-auto">
+      <div ref={containerRef} className="relative w-full sm:w-auto">
         <button
           type="button"
           className="flex w-full items-center gap-3 rounded-[1.1rem] border border-white/10 bg-[#10161f]/88 px-3 py-3 text-left shadow-[0_20px_50px_rgba(0,0,0,0.28)] backdrop-blur sm:min-w-64"
@@ -55,14 +74,21 @@ export function AppHeader({ session, accountMenuOpen, onMenuToggle, onNavigate, 
               className="block w-full px-4 py-3 text-left text-sm text-white transition hover:bg-white/5"
               onClick={() => onNavigate("dashboard")}
             >
-              View dashboard
+              Dashboard
+            </button>
+            <button
+              type="button"
+              className="block w-full px-4 py-3 text-left text-sm text-white transition hover:bg-white/5"
+              onClick={() => onNavigate("jobs")}
+            >
+              Jobs
             </button>
             <button
               type="button"
               className="block w-full px-4 py-3 text-left text-sm text-white transition hover:bg-white/5"
               onClick={() => onNavigate("settings")}
             >
-              View settings
+              Settings
             </button>
             <button
               type="button"

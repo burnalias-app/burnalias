@@ -21,6 +21,26 @@ export function formatDate(value: string | null): string {
   }).format(new Date(value));
 }
 
+export function formatInterval(intervalMs: number): string {
+  if (intervalMs % (24 * 60 * 60 * 1000) === 0) {
+    const days = intervalMs / (24 * 60 * 60 * 1000);
+    return `${days} day${days === 1 ? "" : "s"}`;
+  }
+
+  if (intervalMs % (60 * 60 * 1000) === 0) {
+    const hours = intervalMs / (60 * 60 * 1000);
+    return `${hours} hour${hours === 1 ? "" : "s"}`;
+  }
+
+  if (intervalMs % (60 * 1000) === 0) {
+    const minutes = intervalMs / (60 * 1000);
+    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+
+  const seconds = Math.max(1, Math.round(intervalMs / 1000));
+  return `${seconds} second${seconds === 1 ? "" : "s"}`;
+}
+
 export function getCountdown(expiresAt: string | null): string {
   if (!expiresAt) return "No expiration";
   const diff = new Date(expiresAt).getTime() - Date.now();
@@ -43,28 +63,24 @@ export function makeProviderId(type: ProviderType): string {
 
 export function buildProviderDraft(
   type: ProviderType,
-  supportedProvider?: SupportedProviderDefinition,
-  existingProviders: ConfiguredProvider[] = []
+  supportedProvider?: SupportedProviderDefinition
 ): ConfiguredProvider {
   const shared = {
     id: makeProviderId(type),
-    name: supportedProvider?.label ?? type,
-    enabled: true
+    name: supportedProvider?.label ?? type
   };
 
-  if (type === "mock") {
-    const existingMock = existingProviders.find((p) => p.type === "mock");
+  if (type === "simplelogin") {
     return {
       ...shared,
       type,
       config: {
-        aliasDomain: existingMock?.type === "mock" ? existingMock.config.aliasDomain : "burnalias.test"
+        apiKey: "",
+        hasStoredSecret: false,
+        clearStoredSecret: false,
+        lastConnectionTestSucceededAt: null
       }
     };
-  }
-
-  if (type === "simplelogin") {
-    return { ...shared, type, config: { apiKey: "" } };
   }
 
   return { ...shared, type, config: {} };

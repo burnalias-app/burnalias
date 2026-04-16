@@ -1,10 +1,11 @@
 import { Router } from "express";
 import { z } from "zod";
 import { AliasService, createAliasSchema } from "../services/aliasService";
+import { ExpirationScheduler } from "../services/expirationScheduler";
 
-const statusSchema = z.enum(["active", "disabled", "expired"]);
+const statusSchema = z.enum(["active", "inactive", "expired", "deleted"]);
 
-export function createAliasRouter(aliasService: AliasService): Router {
+export function createAliasRouter(aliasService: AliasService, scheduler: ExpirationScheduler): Router {
   const router = Router();
 
   router.get("/", (req, res) => {
@@ -48,12 +49,41 @@ export function createAliasRouter(aliasService: AliasService): Router {
 
   router.post("/:id/disable", async (req, res) => {
     try {
-      const alias = await aliasService.setAliasStatus(req.params.id, "disabled");
+      const alias = await aliasService.setAliasStatus(req.params.id, "inactive");
       return res.json({ alias });
     } catch (error) {
       const status = error instanceof Error && error.message === "Alias not found" ? 404 : 400;
       return res.status(status).json({
         error: error instanceof Error ? error.message : "Unable to disable alias."
+      });
+    }
+  });
+
+  router.post("/sync", async (_req, res) => {
+    try {
+      await scheduler.runJob("provider-sync");
+      return res.status(204).send();
+    } catch (error) {
+      return res.status(400).json({
+        error: error instanceof Error ? error.message : "Unable to sync aliases."
+      });
+    }
+  });
+
+  router.patch("/:id/expiration", async (req, res) => {
+    const parsed = z.object({
+      expiresInHours: z.coerce.number().int().min(1).max(87600).nullable()
+    }).safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.flatten() });
+    }
+    try {
+      const alias = await aliasService.updateExpiration(req.params.id, parsed.data.expiresInHours);
+      return res.json({ alias });
+    } catch (error) {
+      const status = error instanceof Error && error.message === "Alias not found" ? 404 : 400;
+      return res.status(status).json({
+        error: error instanceof Error ? error.message : "Unable to update expiration."
       });
     }
   });

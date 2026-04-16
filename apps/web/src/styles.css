@@ -11,11 +11,11 @@
   }
 
   html {
-    @apply bg-[#07090d];
+    @apply overflow-x-hidden bg-[#07090d];
   }
 
   body {
-    @apply min-h-screen bg-[radial-gradient(circle_at_50%_12%,rgba(215,169,104,0.18),transparent_18%),radial-gradient(circle_at_50%_12%,rgba(255,255,255,0.06),transparent_30%),linear-gradient(180deg,#0d1117_0%,#07090d_100%)] text-slate-100 antialiased;
+    @apply min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_50%_12%,rgba(215,169,104,0.18),transparent_18%),radial-gradient(circle_at_50%_12%,rgba(255,255,255,0.06),transparent_30%),linear-gradient(180deg,#0d1117_0%,#07090d_100%)] text-slate-100 antialiased;
     background-image:
       radial-gradient(circle at 50% 12%, rgba(215, 169, 104, 0.18), transparent 18%),
       radial-gradient(circle at 50% 12%, rgba(255, 255, 255, 0.06), transparent 30%),
@@ -37,6 +37,6 @@
   }
 
   #root {
-    @apply min-h-screen;
+    @apply min-h-screen overflow-x-hidden;
   }
 }

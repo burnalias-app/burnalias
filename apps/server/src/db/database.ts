@@ -1,28 +1,97 @@
 import Database from "better-sqlite3";
 import { config } from "../config";
+import { createId } from "../lib/id";
 import { logger } from "../lib/logger";
 
 const log = logger.child({ module: "database" });
 
-const DEFAULT_MOCK_PROVIDER_ID = "provider-mock";
-
-function buildDefaultProvidersJson(aliasDomain: string): string {
-  return JSON.stringify([
-    {
-      id: DEFAULT_MOCK_PROVIDER_ID,
-      type: "mock",
-      name: "Mock provider",
-      enabled: true,
-      config: {
-        aliasDomain
-      }
-    }
-  ]);
-}
-
 function columnExists(db: Database.Database, tableName: string, columnName: string): boolean {
   const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
   return columns.some((column) => column.name === columnName);
+}
+
+function migrateLegacyMockProvider(db: Database.Database): void {
+  const settingsRow = db
+    .prepare(`
+      SELECT providers_json, active_provider_id
+      FROM app_settings
+      WHERE id = 1
+    `)
+    .get() as {
+      providers_json: string | null;
+      active_provider_id: string | null;
+    };
+
+  let providers: Array<{ type: string; id: string }> = [];
+  try {
+    const raw = settingsRow.providers_json?.trim();
+    if (raw) providers = JSON.parse(raw) as Array<{ type: string; id: string }>;
+  } catch {
+    // Ignore malformed JSON and leave provider cleanup to later validation paths.
+  }
+
+  const hasMockProvider = providers.some((provider) => provider.type === "mock");
+  const mockAliases = db
+    .prepare(`
+      SELECT id, email
+      FROM aliases
+      WHERE provider_name = 'mock'
+        AND status IN ('active', 'inactive')
+    `)
+    .all() as Array<{ id: string; email: string }>;
+
+  if (!hasMockProvider && mockAliases.length === 0) {
+    return;
+  }
+
+  const nowIso = new Date().toISOString();
+  const updateMockAliases = db.prepare(`
+    UPDATE aliases
+    SET status = 'deleted',
+        status_changed_at = ?
+    WHERE id = ?
+  `);
+  const insertAuditLog = db.prepare(`
+    INSERT INTO audit_logs (id, alias_id, event_type, message, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  const updateSettings = db.prepare(`
+    UPDATE app_settings
+    SET providers_json = ?,
+        active_provider_id = ?,
+        updated_at = ?
+    WHERE id = 1
+  `);
+
+  const filteredProviders = providers.filter((provider) => provider.type !== "mock");
+  const nextActiveProviderId = filteredProviders.some((provider) => provider.id === settingsRow.active_provider_id)
+    ? settingsRow.active_provider_id
+    : filteredProviders[0]?.id ?? null;
+
+  const transaction = db.transaction(() => {
+    for (const alias of mockAliases) {
+      updateMockAliases.run(nowIso, alias.id);
+      insertAuditLog.run(
+        createId(),
+        alias.id,
+        "alias.deleted",
+        `Legacy mock provider was removed from BurnAlias. Alias ${alias.email} was marked deleted locally.`,
+        nowIso
+      );
+    }
+
+    updateSettings.run(JSON.stringify(filteredProviders), nextActiveProviderId, nowIso);
+  });
+
+  transaction();
+
+  log.info(
+    {
+      migratedAliasCount: mockAliases.length,
+      removedMockProviders: hasMockProvider ? 1 : 0
+    },
+    "Migrated legacy mock provider state"
+  );
 }
 
 export function createDatabase(): Database.Database {
@@ -39,7 +108,8 @@ export function createDatabase(): Database.Database {
       destination_email TEXT NOT NULL,
       created_at TEXT NOT NULL,
       expires_at TEXT,
-      status TEXT NOT NULL CHECK (status IN ('active', 'disabled', 'expired')),
+      status TEXT NOT NULL CHECK (status IN ('active', 'inactive', 'expired', 'deleted')),
+      status_changed_at TEXT NOT NULL,
       label TEXT
     );
 
@@ -70,9 +140,73 @@ export function createDatabase(): Database.Database {
       providers_json TEXT,
       active_provider_id TEXT,
       forward_addresses_json TEXT NOT NULL,
+      history_retention_days INTEGER NOT NULL DEFAULT 60,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS scheduler_jobs (
+      id TEXT PRIMARY KEY,
+      last_started_at TEXT,
+      last_finished_at TEXT,
+      last_outcome TEXT NOT NULL DEFAULT 'idle',
+      last_summary TEXT
+    );
   `);
+
+  const aliasesSql = (
+    db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'aliases'`).get() as
+      | { sql: string }
+      | undefined
+  )?.sql;
+  if (!aliasesSql?.includes("'inactive'") || !columnExists(db, "aliases", "status_changed_at")) {
+    log.info("Running migration: rebuild aliases table for lifecycle statuses");
+    db.pragma("foreign_keys = OFF");
+    try {
+      db.exec(`
+        DROP TABLE IF EXISTS aliases_new;
+
+        CREATE TABLE aliases_new (
+          id TEXT PRIMARY KEY,
+          email TEXT NOT NULL,
+          provider_name TEXT NOT NULL,
+          provider_alias_id TEXT NOT NULL,
+          destination_email TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT,
+          status TEXT NOT NULL CHECK (status IN ('active', 'inactive', 'expired', 'deleted')),
+          status_changed_at TEXT NOT NULL,
+          label TEXT
+        );
+
+        INSERT INTO aliases_new (
+          id, email, provider_name, provider_alias_id, destination_email, created_at, expires_at, status, status_changed_at, label
+        )
+        SELECT
+          id,
+          email,
+          provider_name,
+          provider_alias_id,
+          destination_email,
+          created_at,
+          expires_at,
+          CASE status
+            WHEN 'disabled' THEN 'inactive'
+            ELSE status
+          END,
+          created_at,
+          label
+        FROM aliases;
+
+        DROP TABLE aliases;
+        ALTER TABLE aliases_new RENAME TO aliases;
+
+        CREATE INDEX IF NOT EXISTS idx_aliases_status ON aliases(status);
+        CREATE INDEX IF NOT EXISTS idx_aliases_expires_at ON aliases(expires_at);
+      `);
+    } finally {
+      db.pragma("foreign_keys = ON");
+    }
+  }
 
   if (!columnExists(db, "sessions", "csrf_token")) {
     log.debug("Running migration: add sessions.csrf_token");
@@ -89,6 +223,11 @@ export function createDatabase(): Database.Database {
     db.exec(`ALTER TABLE app_settings ADD COLUMN active_provider_id TEXT`);
   }
 
+  if (!columnExists(db, "app_settings", "history_retention_days")) {
+    log.debug("Running migration: add app_settings.history_retention_days");
+    db.exec(`ALTER TABLE app_settings ADD COLUMN history_retention_days INTEGER NOT NULL DEFAULT 60`);
+  }
+
   const existingSettings = db.prepare(`SELECT COUNT(*) as count FROM app_settings WHERE id = 1`).get() as {
     count: number;
   };
@@ -97,37 +236,14 @@ export function createDatabase(): Database.Database {
       INSERT INTO app_settings (id, alias_domain, providers_json, active_provider_id, forward_addresses_json, updated_at)
       VALUES (1, ?, ?, ?, ?, ?)
     `).run(
-      config.mockProviderDomain,
-      buildDefaultProvidersJson(config.mockProviderDomain),
-      DEFAULT_MOCK_PROVIDER_ID,
+      "",
+      JSON.stringify([]),
+      null,
       JSON.stringify(config.forwardAddresses),
       new Date().toISOString()
     );
   } else {
-    const settingsRow = db
-      .prepare(`
-        SELECT alias_domain, providers_json, active_provider_id
-        FROM app_settings
-        WHERE id = 1
-      `)
-      .get() as {
-        alias_domain: string;
-        providers_json: string | null;
-        active_provider_id: string | null;
-      };
-
-    const nextProvidersJson =
-      settingsRow.providers_json && settingsRow.providers_json.trim().length > 0
-        ? settingsRow.providers_json
-        : buildDefaultProvidersJson(settingsRow.alias_domain ?? config.mockProviderDomain);
-    const nextActiveProviderId = settingsRow.active_provider_id ?? DEFAULT_MOCK_PROVIDER_ID;
-
-    db.prepare(`
-      UPDATE app_settings
-      SET providers_json = ?,
-          active_provider_id = ?
-      WHERE id = 1
-    `).run(nextProvidersJson, nextActiveProviderId);
+    migrateLegacyMockProvider(db);
   }
 
   log.info("Database ready");

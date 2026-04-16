@@ -1,4 +1,4 @@
-export type AliasStatus = "active" | "disabled" | "expired";
+export type AliasStatus = "active" | "inactive" | "expired" | "deleted";
 
 export interface Alias {
   id: string;
@@ -17,9 +17,10 @@ export interface CreateAliasPayload {
   destinationEmail: string;
   expiresInHours: number | null;
   label: string | null;
+  providerHint?: string | null;
 }
 
-export type ProviderType = "mock" | "simplelogin" | "addy" | "cloudflare";
+export type ProviderType = "simplelogin" | "addy" | "cloudflare";
 
 export interface SupportedProviderDefinition {
   type: ProviderType;
@@ -31,23 +32,20 @@ export interface SupportedProviderDefinition {
 export type ConfiguredProvider =
   | {
       id: string;
-      type: "mock";
-      name: string;
-      enabled: boolean;
-      config: { aliasDomain: string };
-    }
-  | {
-      id: string;
       type: "simplelogin";
       name: string;
-      enabled: boolean;
-      config: { apiKey: string };
+      config: {
+        apiKey: string;
+        hasStoredSecret?: boolean;
+        clearStoredSecret?: boolean;
+        lastConnectionTestSucceededAt?: string | null;
+        lastConnectionTestVerificationToken?: string | null;
+      };
     }
   | {
       id: string;
       type: "addy" | "cloudflare";
       name: string;
-      enabled: boolean;
       config: Record<string, never>;
     };
 
@@ -71,9 +69,35 @@ export interface AppSettings {
   uiSettings: {
     forwardAddresses: string[];
   };
+  lifecycleSettings: {
+    historyRetentionDays: number;
+  };
   securitySettings: {
     sessionTtlMs: number;
   };
+}
+
+export type ForwardAddressSource = "provider" | "settings" | "none";
+
+export interface ForwardAddressState {
+  forwardAddresses: string[];
+  source: ForwardAddressSource;
+  providerName: string | null;
+}
+
+export type JobId = "expiration-sweep" | "terminal-history-purge" | "provider-sync";
+
+export interface SchedulerJob {
+  id: JobId;
+  title: string;
+  description: string;
+  intervalMs: number;
+  lastStartedAt: string | null;
+  lastFinishedAt: string | null;
+  nextRunAt: string | null;
+  isRunning: boolean;
+  lastOutcome: "idle" | "success" | "error";
+  lastSummary: string | null;
 }
 
 let csrfToken: string | null = null;
@@ -126,15 +150,22 @@ export async function fetchProviders(): Promise<string[]> {
   return data.providers;
 }
 
-export async function fetchForwardAddresses(): Promise<string[]> {
-  const data = await request<{ forwardAddresses: string[] }>("/api/forward-addresses");
-  return data.forwardAddresses;
+export async function fetchForwardAddresses(): Promise<ForwardAddressState> {
+  return request<ForwardAddressState>("/api/forward-addresses");
 }
 
 export async function createAlias(payload: CreateAliasPayload): Promise<Alias> {
   const data = await request<{ alias: Alias }>("/api/aliases", {
     method: "POST",
     body: JSON.stringify(payload)
+  });
+  return data.alias;
+}
+
+export async function updateAliasExpiration(id: string, expiresInHours: number | null): Promise<Alias> {
+  const data = await request<{ alias: Alias }>(`/api/aliases/${id}/expiration`, {
+    method: "PATCH",
+    body: JSON.stringify({ expiresInHours })
   });
   return data.alias;
 }
@@ -150,6 +181,23 @@ export async function setAliasEnabled(id: string, enabled: boolean): Promise<Ali
 export async function deleteAlias(id: string): Promise<void> {
   await request<void>(`/api/aliases/${id}`, {
     method: "DELETE"
+  });
+}
+
+export async function syncAliases(): Promise<void> {
+  await request<void>("/api/aliases/sync", {
+    method: "POST"
+  });
+}
+
+export async function fetchJobs(): Promise<SchedulerJob[]> {
+  const data = await request<{ jobs: SchedulerJob[] }>("/api/jobs");
+  return data.jobs;
+}
+
+export async function runJob(jobId: JobId): Promise<void> {
+  await request<void>(`/api/jobs/${jobId}/run`, {
+    method: "POST"
   });
 }
 
@@ -182,6 +230,8 @@ export async function fetchSettings(): Promise<AppSettings> {
 export interface ConnectionTestResult {
   success: boolean;
   message: string;
+  testedAt?: string;
+  verificationToken?: string | null;
 }
 
 export async function testProviderConnection(
@@ -195,8 +245,19 @@ export async function testProviderConnection(
 }
 
 export async function fetchActiveProviderSuffix(): Promise<string | null> {
-  const data = await request<{ suffix: string | null }>("/api/providers/active/suffix");
+  const data = await request<{ suffix: string | null; providerHint: string | null }>(
+    "/api/providers/active/suffix"
+  );
   return data.suffix;
+}
+
+export interface ActiveProviderPreview {
+  suffix: string | null;
+  providerHint: string | null;
+}
+
+export async function fetchActiveProviderPreview(): Promise<ActiveProviderPreview> {
+  return request<ActiveProviderPreview>("/api/providers/active/suffix");
 }
 
 export async function updateSettings(settings: AppSettings): Promise<AppSettings> {
@@ -209,6 +270,9 @@ export async function updateSettings(settings: AppSettings): Promise<AppSettings
       },
       uiSettings: {
         forwardAddresses: settings.uiSettings.forwardAddresses
+      },
+      lifecycleSettings: {
+        historyRetentionDays: settings.lifecycleSettings.historyRetentionDays
       }
     })
   });

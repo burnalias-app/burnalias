@@ -10,6 +10,7 @@ type AliasRow = {
   created_at: string;
   expires_at: string | null;
   status: AliasStatus;
+  status_changed_at: string;
   label: string | null;
 };
 
@@ -31,15 +32,20 @@ export class AliasRepository {
   constructor(private readonly db: Database.Database) {}
 
   create(alias: Alias): Alias {
+    const record = {
+      ...alias,
+      statusChangedAt: alias.createdAt
+    };
+
     this.db
       .prepare(`
         INSERT INTO aliases (
-          id, email, provider_name, provider_alias_id, destination_email, created_at, expires_at, status, label
+          id, email, provider_name, provider_alias_id, destination_email, created_at, expires_at, status, status_changed_at, label
         ) VALUES (
-          @id, @email, @providerName, @providerAliasId, @destinationEmail, @createdAt, @expiresAt, @status, @label
+          @id, @email, @providerName, @providerAliasId, @destinationEmail, @createdAt, @expiresAt, @status, @statusChangedAt, @label
         )
       `)
-      .run(alias);
+      .run(record);
 
     return alias;
   }
@@ -65,6 +71,19 @@ export class AliasRepository {
       .map((row: unknown) => mapAlias(row as AliasRow));
   }
 
+  countNonTerminalByProviderName(providerName: string): number {
+    const row = this.db
+      .prepare(`
+        SELECT COUNT(*) as count
+        FROM aliases
+        WHERE provider_name = ?
+          AND status IN ('active', 'inactive')
+      `)
+      .get(providerName) as { count: number };
+
+    return row.count;
+  }
+
   findById(id: string): Alias | null {
     const row = this.db
       .prepare(`
@@ -76,14 +95,25 @@ export class AliasRepository {
     return row ? mapAlias(row) : null;
   }
 
-  updateStatus(id: string, status: AliasStatus): void {
+  updateExpiration(id: string, expiresAt: string | null): void {
     this.db
       .prepare(`
         UPDATE aliases
-        SET status = ?
+        SET expires_at = ?
         WHERE id = ?
       `)
-      .run(status, id);
+      .run(expiresAt, id);
+  }
+
+  updateStatus(id: string, status: AliasStatus, statusChangedAt = new Date().toISOString()): void {
+    this.db
+      .prepare(`
+        UPDATE aliases
+        SET status = ?,
+            status_changed_at = ?
+        WHERE id = ?
+      `)
+      .run(status, statusChangedAt, id);
   }
 
   delete(id: string): void {
@@ -95,16 +125,51 @@ export class AliasRepository {
       .run(id);
   }
 
-  listExpiredActive(nowIso: string): Alias[] {
+  listExpiring(nowIso: string): Alias[] {
     return this.db
       .prepare(`
         SELECT * FROM aliases
-        WHERE status = 'active'
+        WHERE status IN ('active', 'inactive')
           AND expires_at IS NOT NULL
           AND expires_at <= ?
         ORDER BY expires_at ASC
       `)
       .all(nowIso)
+      .map((row: unknown) => mapAlias(row as AliasRow));
+  }
+
+  listNonTerminal(): Alias[] {
+    return this.db
+      .prepare(`
+        SELECT * FROM aliases
+        WHERE status IN ('active', 'inactive')
+        ORDER BY created_at DESC
+      `)
+      .all()
+      .map((row: unknown) => mapAlias(row as AliasRow));
+  }
+
+  listTerminalBefore(cutoffIso: string): Alias[] {
+    return this.db
+      .prepare(`
+        SELECT * FROM aliases
+        WHERE status IN ('expired', 'deleted')
+          AND status_changed_at <= ?
+        ORDER BY status_changed_at ASC
+      `)
+      .all(cutoffIso)
+      .map((row: unknown) => mapAlias(row as AliasRow));
+  }
+
+  listTerminalByProviderName(providerName: string): Alias[] {
+    return this.db
+      .prepare(`
+        SELECT * FROM aliases
+        WHERE provider_name = ?
+          AND status IN ('expired', 'deleted')
+        ORDER BY status_changed_at DESC, created_at DESC
+      `)
+      .all(providerName)
       .map((row: unknown) => mapAlias(row as AliasRow));
   }
 }

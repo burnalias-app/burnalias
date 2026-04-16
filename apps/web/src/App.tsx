@@ -4,26 +4,41 @@ import {
   AppSettings,
   ConfiguredProvider,
   ProviderType,
+  SchedulerJob,
   SessionState,
   SupportedProviderDefinition,
+  ActiveProviderPreview,
   createAlias,
   deleteAlias,
-  fetchActiveProviderSuffix,
+  updateAliasExpiration,
+  fetchJobs,
+  fetchActiveProviderPreview,
   fetchAliases,
+  fetchForwardAddresses,
   fetchSession,
   fetchSettings,
+  ForwardAddressState,
   login,
   logout,
+  runJob,
   setAliasEnabled,
+  syncAliases,
   updateSettings
 } from "./api";
 import { AppHeader } from "./components/AppHeader";
 import { AliasFormState, DashboardView, Filter } from "./components/DashboardView";
+import { JobsView } from "./components/JobsView";
 import { LoginPage } from "./components/LoginPage";
 import { SettingsFormState, SettingsView } from "./components/SettingsView";
 import { buildProviderDraft, panelClassName, randomAliasName } from "./lib/utils";
 
-type ViewMode = "dashboard" | "settings";
+type ViewMode = "dashboard" | "settings" | "jobs";
+type ToastTone = "success" | "error" | "info";
+
+type ToastState = {
+  message: string;
+  tone: ToastTone;
+} | null;
 
 const emptyForm: AliasFormState = {
   localPart: "",
@@ -39,36 +54,58 @@ export default function App() {
   const [settingsForm, setSettingsForm] = useState<SettingsFormState>({
     providers: [],
     activeProviderId: null,
-    forwardAddressesText: ""
+    forwardAddressesText: "",
+    historyRetentionDays: "60"
   });
   const [session, setSession] = useState<SessionState | null>(null);
+  const [jobs, setJobs] = useState<SchedulerJob[]>([]);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [activeView, setActiveView] = useState<ViewMode>("dashboard");
   const [authChecking, setAuthChecking] = useState(true);
-  const [filter, setFilter] = useState<Filter>("all");
+  const [filter, setFilter] = useState<Filter>("active");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [syncSubmitting, setSyncSubmitting] = useState(false);
+  const [jobsLoading, setJobsLoading] = useState(false);
+  const [runningJobId, setRunningJobId] = useState<SchedulerJob["id"] | null>(null);
   const [loginSubmitting, setLoginSubmitting] = useState(false);
   const [settingsSubmitting, setSettingsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [aliasSuffix, setAliasSuffix] = useState<string | null>(null);
+  const [jobsError, setJobsError] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastState>(null);
+  const [activeProviderPreview, setActiveProviderPreview] = useState<ActiveProviderPreview>({
+    suffix: null,
+    providerHint: null
+  });
+  const [forwardAddressState, setForwardAddressState] = useState<ForwardAddressState>({
+    forwardAddresses: [],
+    source: "none",
+    providerName: null
+  });
   const [form, setForm] = useState<AliasFormState>({ ...emptyForm, localPart: randomAliasName() });
 
   // Derived state
   const supportedProviders: SupportedProviderDefinition[] = settings?.providerSettings.supportedProviders ?? [];
   const configuredProviders: ConfiguredProvider[] = settings?.providerSettings.providers ?? [];
-  const forwardAddresses: string[] = settings?.uiSettings.forwardAddresses ?? [];
+  const forwardAddresses: string[] = forwardAddressState.forwardAddresses;
   const activeProvider =
     configuredProviders.find((p) => p.id === settings?.providerSettings.activeProviderId) ?? null;
   const activeProviderMeta = supportedProviders.find((p) => p.type === activeProvider?.type) ?? null;
+  const providerSyncJob = jobs.find((job) => job.id === "provider-sync") ?? null;
+  const lastProviderSyncLabel = providerSyncJob?.lastFinishedAt
+    ? new Date(providerSyncJob.lastFinishedAt).toLocaleString([], {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit"
+      })
+    : "Not run yet";
   const aliasPreview = (() => {
     const prefix = form.localPart || "alias";
     if (!activeProvider) return `${prefix}@configured-domain`;
-    if (activeProvider.type === "mock") return `${prefix}@${activeProvider.config.aliasDomain}`;
-    if (aliasSuffix) return `${prefix}${aliasSuffix}`;
+    if (activeProviderPreview.suffix) return `${prefix}${activeProviderPreview.suffix}`;
     const fallbackDomain: Partial<Record<string, string>> = {
       simplelogin: "simplelogin.com",
       addy: "addy.io"
@@ -81,7 +118,9 @@ export default function App() {
       : !activeProviderMeta?.implemented
         ? `${activeProviderMeta?.label ?? activeProvider.name} is not implemented yet.`
         : forwardAddresses.length === 0
-          ? "Add at least one forward-to address in settings."
+          ? forwardAddressState.source === "provider"
+            ? `No verified forward targets are available from ${forwardAddressState.providerName ?? activeProvider.name}.`
+            : "No forward targets are available. Configure them in settings or connect a provider that exposes them."
           : null;
 
   // --- Helpers ---
@@ -91,14 +130,23 @@ export default function App() {
     setSettingsForm({
       providers: nextSettings.providerSettings.providers,
       activeProviderId: nextSettings.providerSettings.activeProviderId,
-      forwardAddressesText: nextSettings.uiSettings.forwardAddresses.join("\n")
+      forwardAddressesText: nextSettings.uiSettings.forwardAddresses.join("\n"),
+      historyRetentionDays: String(nextSettings.lifecycleSettings.historyRetentionDays)
     });
-    setForm((cur) => ({
-      ...cur,
-      destinationEmail: nextSettings.uiSettings.forwardAddresses.includes(cur.destinationEmail)
-        ? cur.destinationEmail
-        : nextSettings.uiSettings.forwardAddresses[0] ?? ""
-    }));
+  }
+
+  async function loadForwardTargets(fallbackSettings?: AppSettings | null, fallbackProviderName?: string | null) {
+    try {
+      setForwardAddressState(await fetchForwardAddresses());
+    } catch {
+      const nextSettings = fallbackSettings ?? settings;
+      const nextProviderName = fallbackProviderName ?? activeProvider?.name ?? null;
+      setForwardAddressState({
+        forwardAddresses: nextSettings?.uiSettings.forwardAddresses ?? [],
+        source: (nextSettings?.uiSettings.forwardAddresses?.length ?? 0) > 0 ? "settings" : "none",
+        providerName: nextProviderName
+      });
+    }
   }
 
   async function loadAliases(selectedFilter: Filter) {
@@ -113,6 +161,22 @@ export default function App() {
     }
   }
 
+  async function loadJobs() {
+    setJobsLoading(true);
+    setJobsError(null);
+    try {
+      setJobs(await fetchJobs());
+    } catch (err) {
+      setJobsError(err instanceof Error ? err.message : "Failed to load jobs.");
+    } finally {
+      setJobsLoading(false);
+    }
+  }
+
+  function showToast(message: string, tone: ToastTone = "success") {
+    setToast({ message, tone });
+  }
+
   // --- Effects ---
 
   useEffect(() => {
@@ -123,6 +187,8 @@ export default function App() {
         if (nextSession.authenticated) {
           const nextSettings = await fetchSettings();
           syncSettings(nextSettings);
+          await loadForwardTargets(nextSettings);
+          setJobs(await fetchJobs());
         }
       } catch (err) {
         setLoginError(err instanceof Error ? err.message : "Failed to initialize auth.");
@@ -139,20 +205,44 @@ export default function App() {
   }, [filter, session?.authenticated]);
 
   useEffect(() => {
-    if (!session?.authenticated || !activeProvider || activeProvider.type === "mock") {
-      setAliasSuffix(null);
+    if (session?.authenticated && activeView === "jobs") {
+      void loadJobs();
+    }
+  }, [activeView, session?.authenticated]);
+
+  useEffect(() => {
+    if (!session?.authenticated || !activeProvider) {
+      setActiveProviderPreview({ suffix: null, providerHint: null });
       return;
     }
-    void fetchActiveProviderSuffix()
-      .then(setAliasSuffix)
-      .catch(() => setAliasSuffix(null));
+    void fetchActiveProviderPreview()
+      .then(setActiveProviderPreview)
+      .catch(() => setActiveProviderPreview({ suffix: null, providerHint: null }));
   }, [activeProvider?.id, session?.authenticated]);
 
   useEffect(() => {
-    if (!toastMessage) return;
-    const timeout = window.setTimeout(() => setToastMessage(null), 3000);
+    if (!session?.authenticated) {
+      setForwardAddressState({ forwardAddresses: [], source: "none", providerName: null });
+      return;
+    }
+
+    void loadForwardTargets();
+  }, [activeProvider?.id, session?.authenticated]);
+
+  useEffect(() => {
+    setForm((cur) => ({
+      ...cur,
+      destinationEmail: forwardAddresses.includes(cur.destinationEmail)
+        ? cur.destinationEmail
+        : forwardAddresses[0] ?? ""
+    }));
+  }, [forwardAddresses]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timeout = window.setTimeout(() => setToast(null), 3000);
     return () => window.clearTimeout(timeout);
-  }, [toastMessage]);
+  }, [toast]);
 
   // --- Handlers ---
 
@@ -164,6 +254,7 @@ export default function App() {
       setSession(nextSession);
       const nextSettings = await fetchSettings();
       syncSettings(nextSettings);
+      await loadForwardTargets(nextSettings);
       await loadAliases(filter);
     } catch (err) {
       setLoginError(err instanceof Error ? err.message : "Login failed.");
@@ -177,8 +268,12 @@ export default function App() {
     setSession({ authenticated: false });
     setSettings(null);
     setAliases([]);
+    setJobs([]);
+    setForwardAddressState({ forwardAddresses: [], source: "none", providerName: null });
+    setActiveProviderPreview({ suffix: null, providerHint: null });
     setError(null);
     setSettingsError(null);
+    setJobsError(null);
     setAccountMenuOpen(false);
     setActiveView("dashboard");
   }
@@ -201,11 +296,17 @@ export default function App() {
         localPart: form.localPart,
         destinationEmail: form.destinationEmail,
         expiresInHours,
-        label: form.label || null
+        label: form.label || null,
+        providerHint: activeProviderPreview.providerHint
       });
       setForm({ ...emptyForm, localPart: randomAliasName(), destinationEmail: forwardAddresses[0] ?? "", expiresUnit: form.expiresUnit });
+      try {
+        setActiveProviderPreview(await fetchActiveProviderPreview());
+      } catch {
+        setActiveProviderPreview({ suffix: null, providerHint: null });
+      }
       await loadAliases(filter);
-      setToastMessage("Alias created.");
+      showToast("Alias created.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create alias.");
     } finally {
@@ -230,10 +331,18 @@ export default function App() {
           activeProviderId: settingsForm.activeProviderId
         },
         uiSettings: { forwardAddresses: nextForwardAddresses },
+        lifecycleSettings: {
+          historyRetentionDays: Number(settingsForm.historyRetentionDays)
+        },
         securitySettings: { sessionTtlMs: settings?.securitySettings.sessionTtlMs ?? 0 }
       });
       syncSettings(nextSettings);
-      setToastMessage("Settings saved.");
+      const nextActiveProviderName =
+        nextSettings.providerSettings.providers.find(
+          (provider) => provider.id === nextSettings.providerSettings.activeProviderId
+        )?.name ?? null;
+      await loadForwardTargets(nextSettings, nextActiveProviderName);
+      showToast("Settings saved.");
     } catch (err) {
       setSettingsError(err instanceof Error ? err.message : "Failed to save settings.");
     } finally {
@@ -245,6 +354,7 @@ export default function App() {
     try {
       await setAliasEnabled(alias.id, alias.status !== "active");
       await loadAliases(filter);
+      showToast(alias.status === "active" ? "Alias set inactive." : "Alias reactivated.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update alias.");
     }
@@ -254,19 +364,69 @@ export default function App() {
     try {
       await deleteAlias(id);
       await loadAliases(filter);
+      showToast("Alias deleted.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete alias.");
+    }
+  }
+
+  async function handleUpdateExpiration(id: string, expiresInHours: number | null) {
+    try {
+      await updateAliasExpiration(id, expiresInHours);
+      await loadAliases(filter);
+      showToast(expiresInHours != null ? "Expiration updated." : "Expiration cleared.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update expiration.");
+    }
+  }
+
+  async function handleSync() {
+    setSyncSubmitting(true);
+    setError(null);
+    try {
+      await syncAliases();
+      await loadAliases(filter);
+      if (activeView === "jobs") {
+        await loadJobs();
+      }
+      showToast("Alias list refreshed.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to refresh aliases.");
+    } finally {
+      setSyncSubmitting(false);
+    }
+  }
+
+  async function handleRunJob(jobId: SchedulerJob["id"]) {
+    setRunningJobId(jobId);
+    setJobsError(null);
+    try {
+      await runJob(jobId);
+      await loadJobs();
+      if (jobId === "provider-sync") {
+        await loadAliases(filter);
+      }
+      showToast(
+        jobId === "provider-sync"
+          ? "Provider sync completed."
+          : jobId === "terminal-history-purge"
+            ? "Terminal history purge completed."
+            : "Expiration sweep completed."
+      );
+    } catch (err) {
+      setJobsError(err instanceof Error ? err.message : "Failed to run job.");
+    } finally {
+      setRunningJobId(null);
     }
   }
 
   function handleAddProvider(type: ProviderType) {
     const supportedProvider = supportedProviders.find((p) => p.type === type);
     if (!supportedProvider || settingsForm.providers.some((p) => p.type === type)) return;
-    const nextProvider = buildProviderDraft(type, supportedProvider, settingsForm.providers);
+    const nextProvider = buildProviderDraft(type, supportedProvider);
     setSettingsForm((cur) => ({
       ...cur,
-      providers: [...cur.providers, nextProvider],
-      activeProviderId: cur.activeProviderId ?? (supportedProvider.implemented ? nextProvider.id : null)
+      providers: [...cur.providers, nextProvider]
     }));
   }
 
@@ -278,7 +438,7 @@ export default function App() {
         providers: remaining,
         activeProviderId:
           cur.activeProviderId === providerId
-            ? remaining.find((p) => p.enabled)?.id ?? null
+            ? remaining[0]?.id ?? null
             : cur.activeProviderId
       };
     });
@@ -295,7 +455,7 @@ export default function App() {
 
   if (authChecking) {
     return (
-      <main className="mx-auto flex min-h-screen w-full max-w-6xl items-center px-4 py-8 sm:px-6">
+      <main className="mx-auto box-border flex min-h-screen w-full max-w-6xl items-center px-4 py-8 sm:px-6">
         <section className={panelClassName("w-full p-8")}>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#d7a968]">BurnAlias</p>
           <h1 className="mt-3 font-serif text-4xl text-white">Loading secure workspace...</h1>
@@ -315,7 +475,7 @@ export default function App() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-7xl px-4 py-5 sm:px-6 sm:py-6">
+    <main className="mx-auto box-border w-full max-w-7xl px-4 py-5 sm:px-6 sm:py-6">
       <AppHeader
         session={session}
         accountMenuOpen={accountMenuOpen}
@@ -324,35 +484,91 @@ export default function App() {
         onLogout={() => void handleLogout()}
       />
 
-      {toastMessage ? (
+      {toast ? (
         <div className="pointer-events-none fixed right-4 top-4 z-50 flex w-[min(24rem,calc(100vw-2rem))] justify-end sm:right-6 sm:top-6">
-          <div className="rounded-[1.1rem] border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200 shadow-[0_12px_30px_rgba(0,0,0,0.28)] backdrop-blur">
-            {toastMessage}
+          <div
+            className={[
+              "flex items-start gap-3 rounded-[1.1rem] px-4 py-3 text-sm shadow-[0_12px_30px_rgba(0,0,0,0.28)] backdrop-blur",
+              toast.tone === "success"
+                ? "border border-emerald-400/20 bg-emerald-500/10 text-emerald-200"
+                : toast.tone === "error"
+                  ? "border border-red-400/20 bg-red-500/10 text-red-200"
+                  : "border border-slate-400/20 bg-slate-500/10 text-slate-200"
+            ].join(" ")}
+          >
+            <span className="mt-0.5 shrink-0" aria-hidden="true">
+              {toast.tone === "success" ? (
+                <svg
+                  className="h-4 w-4"
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M20 6 9 17l-5-5" />
+                </svg>
+              ) : toast.tone === "error" ? (
+                <svg
+                  className="h-4 w-4"
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="m15 9-6 6" />
+                  <path d="m9 9 6 6" />
+                </svg>
+              ) : (
+                <svg
+                  className="h-4 w-4"
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="M12 16v-4" />
+                  <path d="M12 8h.01" />
+                </svg>
+              )}
+            </span>
+            <span>{toast.message}</span>
           </div>
         </div>
       ) : null}
 
-      {activeView === "dashboard" && <section className="mb-5 grid gap-4 lg:grid-cols-[1.35fr_0.95fr]">
+      {activeView === "dashboard" && <section className="mb-5">
         <div className={panelClassName("p-6 sm:p-8")}>
-          <h1 className="max-w-3xl font-serif text-4xl leading-none text-white sm:text-5xl lg:text-6xl">
-            Disposable aliases with real expiration controls.
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+            Control center
+          </p>
+          <h1 className="mt-3 max-w-3xl font-serif text-4xl leading-none text-white sm:text-5xl lg:text-6xl">
+            {activeProvider ? `${activeProvider.name} is active.` : "Provider setup needed."}
           </h1>
           <p className="mt-5 max-w-2xl text-sm leading-7 text-slate-300 sm:text-base">
-            Generate aliases against your active provider, route them to a saved forward target, and let BurnAlias disable them automatically when their lifespan runs out.
+            {activeProvider
+              ? "Use the dashboard to create new aliases, adjust expirations, and refresh provider state when needed."
+              : "Configure and activate a provider in settings before creating aliases."}
           </p>
-        </div>
-        <div className={panelClassName("grid gap-3 p-4 sm:grid-cols-3 lg:grid-cols-1")}>
-          <div className="rounded-[1.1rem] border border-white/8 bg-[#151c26]/92 px-4 py-4">
-            <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Aliases</span>
-            <strong className="mt-2 block text-2xl text-white sm:text-3xl">{aliases.length}</strong>
-          </div>
-          <div className="rounded-[1.1rem] border border-white/8 bg-[#151c26]/92 px-4 py-4">
-            <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Configured Providers</span>
-            <strong className="mt-2 block text-2xl text-white sm:text-3xl">{configuredProviders.length}</strong>
-          </div>
-          <div className="rounded-[1.1rem] border border-white/8 bg-[#151c26]/92 px-4 py-4">
-            <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Active Provider</span>
-            <strong className="mt-2 block text-2xl text-white sm:text-3xl">{activeProvider?.name ?? "None"}</strong>
+          <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:max-w-3xl">
+            <div className="rounded-[1.1rem] border border-white/8 bg-[#151c26]/92 px-4 py-4">
+              <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Active provider</span>
+              <strong className="mt-2 block text-xl text-white">{activeProvider?.name ?? "None selected"}</strong>
+            </div>
+            <div className="rounded-[1.1rem] border border-white/8 bg-[#151c26]/92 px-4 py-4">
+              <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Last provider sync</span>
+              <strong className="mt-2 block text-xl text-white">{lastProviderSyncLabel}</strong>
+            </div>
           </div>
         </div>
       </section>}
@@ -360,39 +576,95 @@ export default function App() {
       {activeView === "settings" ? (
         <SettingsView
           settingsForm={settingsForm}
+          aliases={aliases}
           supportedProviders={supportedProviders}
           settingsError={settingsError}
           settingsSubmitting={settingsSubmitting}
+          activeForwardAddressSource={forwardAddressState.source}
+          activeForwardAddresses={forwardAddresses}
+          activeForwardAddressProviderName={forwardAddressState.providerName}
           onSubmit={handleSettingsSubmit}
           onAddProvider={handleAddProvider}
           onRemoveProvider={handleRemoveProvider}
           onSetActive={(id) => setSettingsForm((cur) => ({ ...cur, activeProviderId: id }))}
-          onToggleEnabled={(id, enabled) =>
-            setSettingsForm((cur) => ({
-              ...cur,
-              activeProviderId: !enabled && cur.activeProviderId === id ? null : cur.activeProviderId,
-              providers: cur.providers.map((p) => (p.id === id ? { ...p, enabled } : p))
-            }))
-          }
           onRenameProvider={(id, name) => updateProvider(id, (p) => ({ ...p, name }))}
-          onMockDomainChange={(id, aliasDomain) =>
-            updateProvider(id, (p) => p.type === "mock" ? { ...p, config: { aliasDomain } } : p)
-          }
           onApiKeyChange={(id, apiKey) =>
-            updateProvider(id, (p) => p.type === "simplelogin" ? { ...p, config: { apiKey } } : p)
+            updateProvider(id, (p) =>
+              p.type === "simplelogin"
+                ? {
+                    ...p,
+                    config: {
+                      ...p.config,
+                      apiKey,
+                      hasStoredSecret: p.config.hasStoredSecret || Boolean(apiKey),
+                      clearStoredSecret: false,
+                      lastConnectionTestSucceededAt: apiKey.trim()
+                        ? null
+                        : p.config.lastConnectionTestSucceededAt ?? null,
+                      lastConnectionTestVerificationToken: apiKey.trim()
+                        ? null
+                        : p.config.lastConnectionTestVerificationToken ?? null
+                    }
+                  }
+                : p
+            )
+          }
+          onClearApiKey={(id) =>
+            updateProvider(id, (p) =>
+              p.type === "simplelogin"
+                ? {
+                    ...p,
+                    config: {
+                      ...p.config,
+                      apiKey: "",
+                      hasStoredSecret: false,
+                      clearStoredSecret: true,
+                      lastConnectionTestSucceededAt: null,
+                      lastConnectionTestVerificationToken: null
+                    }
+                  }
+                : p
+            )
+          }
+          onConnectionTestSuccess={(id, testedAt, verificationToken) =>
+            updateProvider(id, (p) =>
+              p.type === "simplelogin"
+                ? {
+                    ...p,
+                    config: {
+                      ...p.config,
+                      clearStoredSecret: false,
+                      lastConnectionTestSucceededAt: testedAt,
+                      lastConnectionTestVerificationToken: verificationToken
+                    }
+                  }
+                : p
+            )
           }
           onForwardTextChange={(value) => setSettingsForm((cur) => ({ ...cur, forwardAddressesText: value }))}
+          onHistoryRetentionDaysChange={(value) => setSettingsForm((cur) => ({ ...cur, historyRetentionDays: value }))}
+        />
+      ) : activeView === "jobs" ? (
+        <JobsView
+          jobs={jobs}
+          loading={jobsLoading}
+          error={jobsError}
+          runningJobId={runningJobId}
+          onRunJob={handleRunJob}
         />
       ) : (
         <DashboardView
           aliases={aliases}
+          configuredProviderTypes={configuredProviders.map((provider) => provider.type)}
           filter={filter}
           error={error}
           loading={loading}
+          syncSubmitting={syncSubmitting}
           form={form}
           activeProvider={activeProvider}
           activeProviderMeta={activeProviderMeta}
           forwardAddresses={forwardAddresses}
+          forwardAddressSource={forwardAddressState.source}
           aliasPreview={aliasPreview}
           createDisabledReason={createDisabledReason}
           submitting={submitting}
@@ -401,6 +673,8 @@ export default function App() {
           onSubmit={handleSubmit}
           onToggle={handleToggle}
           onDelete={handleDelete}
+          onUpdateExpiration={handleUpdateExpiration}
+          onSync={handleSync}
         />
       )}
     </main>
