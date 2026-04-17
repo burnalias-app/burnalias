@@ -59,7 +59,7 @@ export class SimpleLoginProvider implements AliasProvider {
 
   private async slFetch<T>(path: string, init?: RequestInit): Promise<T> {
     const url = `${BASE_URL}${path}`;
-    log.debug({ method: init?.method ?? "GET", path }, "SimpleLogin API request");
+    log.trace({ method: init?.method ?? "GET", path }, "SimpleLogin API request");
 
     const response = await fetch(url, {
       ...init,

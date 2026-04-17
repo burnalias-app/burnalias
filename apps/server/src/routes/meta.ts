@@ -80,20 +80,19 @@ export function createMetaRouter(
 
   router.get("/forward-addresses", (_req, res) => {
     const activeProvider = settingsService.getActiveProvider();
-    const fallbackAddresses = settingsService.getInternalSettings().uiSettings.forwardAddresses;
 
     if (!activeProvider) {
       return res.json({
-        forwardAddresses: fallbackAddresses,
-        source: fallbackAddresses.length > 0 ? "settings" : "none",
+        forwardAddresses: [],
+        source: "none",
         providerName: null
       });
     }
 
     if (!providerRegistry.isImplemented(activeProvider.type)) {
       return res.json({
-        forwardAddresses: fallbackAddresses,
-        source: fallbackAddresses.length > 0 ? "settings" : "none",
+        forwardAddresses: [],
+        source: "none",
         providerName: activeProvider.name
       });
     }
@@ -117,8 +116,8 @@ export function createMetaRouter(
       })
       .catch(() =>
         res.json({
-          forwardAddresses: fallbackAddresses,
-          source: fallbackAddresses.length > 0 ? "settings" : "none",
+          forwardAddresses: [],
+          source: "none",
           providerName: activeProvider.name
         })
       );

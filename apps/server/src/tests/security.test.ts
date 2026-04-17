@@ -138,7 +138,6 @@ async function startServer(options?: {
       BURN_PASSWORD_HASH: PASSWORD_HASH,
       BURN_SESSION_SECRET: "test-session-secret",
       BURN_SESSION_TTL_MS: String(options?.sessionTtlMs ?? 1000 * 60 * 60 * 24 * 7),
-      FORWARD_ADDRESSES: "me@example.com,work@example.com",
       BURN_LOGIN_RATE_LIMIT_MAX_ATTEMPTS: String(options?.loginLimitMaxAttempts ?? 5),
       BURN_LOGIN_RATE_LIMIT_WINDOW_MS: String(options?.loginLimitWindowMs ?? 900_000)
     },
@@ -226,6 +225,14 @@ test("login establishes a session and returns csrf token", async () => {
 
     const aliasesResponse = await server.client.request("/api/aliases");
     assert.equal(aliasesResponse.status, 200);
+
+    const forwardAddressesResponse = await server.client.request("/api/forward-addresses");
+    assert.equal(forwardAddressesResponse.status, 200);
+    assert.deepEqual(await forwardAddressesResponse.json(), {
+      forwardAddresses: [],
+      source: "none",
+      providerName: null
+    });
   } finally {
     await server.stop();
   }

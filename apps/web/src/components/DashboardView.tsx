@@ -3,6 +3,7 @@ import { ForwardAddressSource } from "../api";
 import { Alias, AliasStatus, ConfiguredProvider, SupportedProviderDefinition } from "../api";
 import { fieldClassName, panelClassName, randomAliasName } from "../lib/utils";
 import { AliasCard } from "./AliasCard";
+import { RefreshButton } from "./common/RefreshButton";
 
 export type Filter = AliasStatus | "all";
 
@@ -63,7 +64,6 @@ export function DashboardView({
   onUpdateExpiration,
   onSync
 }: DashboardViewProps) {
-  const refreshIconClassName = syncSubmitting ? "animate-spin" : "";
   const configuredProviderTypeSet = new Set(configuredProviderTypes);
 
   return (
@@ -190,29 +190,11 @@ export function DashboardView({
             <p className="mt-2 text-sm leading-6 text-slate-300">Filter aliases by lifecycle state and manage them in place.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                className="inline-flex h-8 w-8 shrink-0 items-center justify-center text-zinc-400 transition hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-45"
+              <RefreshButton
+                loading={syncSubmitting}
                 onClick={() => void onSync()}
-                disabled={syncSubmitting}
-                aria-label={syncSubmitting ? "Refreshing aliases" : "Refresh aliases"}
-                title={syncSubmitting ? "Refreshing aliases" : "Refresh aliases"}
-              >
-                <svg
-                  className={`h-5 w-5 ${refreshIconClassName}`}
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.75"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-                  <path d="M21 3v6h-6" />
-                </svg>
-              </button>
+                label="Refresh aliases"
+              />
               {filterOptions.map((option) => (
                 <button
                   key={option}

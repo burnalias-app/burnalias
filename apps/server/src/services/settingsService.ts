@@ -11,9 +11,6 @@ export const updateSettingsSchema = z.object({
     providers: z.array(configuredProviderSchema),
     activeProviderId: z.string().trim().min(1).nullable()
   }),
-  uiSettings: z.object({
-    forwardAddresses: z.array(z.string().email())
-  }),
   lifecycleSettings: z.object({
     historyRetentionDays: z.coerce.number().int().min(1).max(3650)
   })
@@ -58,9 +55,6 @@ export interface AppSettings {
     supportedProviders: SupportedProviderDefinition[];
     providers: ConfiguredProvider[];
     activeProviderId: string | null;
-  };
-  uiSettings: {
-    forwardAddresses: string[];
   };
   lifecycleSettings: {
     historyRetentionDays: number;
@@ -130,9 +124,6 @@ export class SettingsService {
         supportedProviders: this.supportedProviders,
         providers,
         activeProviderId: row.active_provider_id
-      },
-      uiSettings: {
-        forwardAddresses: JSON.parse(row.forward_addresses_json) as string[]
       },
       lifecycleSettings: {
         historyRetentionDays: row.history_retention_days
@@ -263,7 +254,6 @@ export class SettingsService {
         UPDATE app_settings
         SET providers_json = ?,
             active_provider_id = ?,
-            forward_addresses_json = ?,
             history_retention_days = ?,
             updated_at = ?
         WHERE id = 1
@@ -271,7 +261,6 @@ export class SettingsService {
       .run(
         JSON.stringify(normalizedProviders),
         input.providerSettings.activeProviderId,
-        JSON.stringify(input.uiSettings.forwardAddresses),
         input.lifecycleSettings.historyRetentionDays,
         new Date().toISOString()
       );

@@ -239,7 +239,7 @@ export function createDatabase(): Database.Database {
       "",
       JSON.stringify([]),
       null,
-      JSON.stringify(config.forwardAddresses),
+      JSON.stringify([]),
       new Date().toISOString()
     );
   } else {

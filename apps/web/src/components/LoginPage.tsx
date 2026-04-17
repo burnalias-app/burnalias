@@ -35,9 +35,6 @@ export function LoginPage({ loginError, loginSubmitting, onLogin }: LoginPagePro
       <section className={panelClassName("p-6 sm:p-8")}>
         <div className="mb-6">
           <h2 className="font-serif text-2xl text-white">Admin login</h2>
-          <p className="mt-2 text-sm leading-6 text-slate-300">
-            Use the credentials configured with <code>BURN_USER</code> and <code>BURN_PASSWORD_HASH</code>.
-          </p>
         </div>
 
         <form className="grid gap-4" onSubmit={handleSubmit}>

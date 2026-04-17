@@ -43,10 +43,6 @@ export const config = {
   expirationCheckIntervalMs: Number(process.env.EXPIRATION_CHECK_INTERVAL_MS ?? 60_000),
   historyPurgeIntervalMs: Number(process.env.HISTORY_PURGE_INTERVAL_MS ?? 24 * 60 * 60 * 1000),
   providerSyncIntervalMs: Number(process.env.PROVIDER_SYNC_INTERVAL_MS ?? 60 * 60 * 1000),
-  forwardAddresses: (process.env.FORWARD_ADDRESSES ?? "me@example.com")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean),
   authUsername,
   authPasswordHash,
   sessionSecret: process.env.BURN_SESSION_SECRET ?? derivedSessionSecret,

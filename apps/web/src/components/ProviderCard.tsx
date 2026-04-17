@@ -10,14 +10,15 @@ type ProviderCardProps = {
   meta: SupportedProviderDefinition | undefined;
   supportedProviders: SupportedProviderDefinition[];
   canSetActive: boolean;
-  canRemove: boolean;
-  removeDisabledReason?: string | null;
+  setActiveDisabledReason?: string | null;
+  saving: boolean;
   onSetActive: (providerId: string) => void;
-  onRemove: (providerId: string) => void;
+  onSetActiveBlocked: (message: string) => void;
   onRename: (providerId: string, name: string) => void;
   onApiKeyChange: (providerId: string, apiKey: string) => void;
   onClearApiKey: (providerId: string) => void;
   onConnectionTestSuccess: (providerId: string, testedAt: string, verificationToken: string) => void;
+  onSave: (providerId: string) => Promise<void>;
 };
 
 export function ProviderCard({
@@ -26,14 +27,15 @@ export function ProviderCard({
   meta,
   supportedProviders,
   canSetActive,
-  canRemove,
-  removeDisabledReason,
+  setActiveDisabledReason,
+  saving,
   onSetActive,
-  onRemove,
+  onSetActiveBlocked,
   onRename,
   onApiKeyChange,
   onClearApiKey,
-  onConnectionTestSuccess
+  onConnectionTestSuccess,
+  onSave
 }: ProviderCardProps) {
   const implemented = meta?.implemented ?? false;
   const [testStatus, setTestStatus] = useState<TestStatus>("idle");
@@ -57,17 +59,33 @@ export function ProviderCard({
     }
   }
 
+  function handleSetActiveToggle(nextChecked: boolean) {
+    if (saving) {
+      onSetActiveBlocked("Settings are already being saved.");
+      return;
+    }
+
+    if (!nextChecked && isActive) {
+      onSetActiveBlocked("Select another ready provider before clearing the current active provider.");
+      return;
+    }
+
+    if (!canSetActive) {
+      onSetActiveBlocked(setActiveDisabledReason ?? "This provider is not ready to be set active yet.");
+      return;
+    }
+
+    if (nextChecked) {
+      onSetActive(provider.id);
+    }
+  }
+
   return (
     <article className="rounded-[1.2rem] border border-white/10 bg-[#141b24]/85 p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h4 className="font-serif text-lg text-white">{configuredProviderLabel(provider, supportedProviders)}</h4>
-            {isActive ? (
-              <span className="rounded-full bg-[#d7a968]/18 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#edd3a7]">
-                Active
-              </span>
-            ) : null}
             {!implemented ? (
               <span className="rounded-full bg-slate-500/20 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-200">
                 Coming soon
@@ -78,23 +96,21 @@ export function ProviderCard({
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            className="rounded-full border border-white/10 bg-[#10161f] px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-white transition hover:bg-[#1b2430] disabled:cursor-not-allowed disabled:opacity-40"
-            onClick={() => onSetActive(provider.id)}
-            disabled={!canSetActive}
+          <label
+            className={[
+              "inline-flex items-center gap-2 rounded-full border border-white/10 bg-[#10161f] px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-white",
+              !canSetActive || saving ? "opacity-60" : ""
+            ].join(" ")}
+            title={setActiveDisabledReason ?? undefined}
           >
-            {isActive ? "Active provider" : "Set active"}
-          </button>
-          <button
-            type="button"
-            className="rounded-full border border-red-400/20 bg-red-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-red-200 transition hover:bg-red-500/15"
-            onClick={() => onRemove(provider.id)}
-            disabled={!canRemove}
-            title={removeDisabledReason ?? undefined}
-          >
-            Remove
-          </button>
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-white/20 bg-[#141b24] text-[#d7a968] focus:ring-[#d7a968]/40"
+              checked={isActive}
+              onChange={(event) => handleSetActiveToggle(event.target.checked)}
+            />
+            Set active
+          </label>
         </div>
       </div>
 
@@ -110,8 +126,8 @@ export function ProviderCard({
         </label>
       </div>
 
-      {!canRemove && removeDisabledReason ? (
-        <p className="mt-3 text-sm leading-6 text-slate-400">{removeDisabledReason}</p>
+      {!canSetActive && setActiveDisabledReason ? (
+        <p className="mt-3 text-sm leading-6 text-slate-400">{setActiveDisabledReason}</p>
       ) : null}
 
       {provider.type === "simplelogin" ? (
@@ -164,7 +180,7 @@ export function ProviderCard({
               type="button"
               className="rounded-[1.1rem] border border-white/10 bg-[#141b24]/88 px-4 py-2 text-sm font-medium text-white transition hover:bg-[#1b2430] disabled:cursor-not-allowed disabled:opacity-60"
               onClick={() => void handleTest()}
-              disabled={testStatus === "testing" || !provider.config.apiKey}
+              disabled={testStatus === "testing" || !provider.config.apiKey || saving}
             >
               {testStatus === "testing" ? "Testing..." : "Test connection"}
             </button>
@@ -172,7 +188,7 @@ export function ProviderCard({
               type="button"
               className="rounded-[1.1rem] border border-white/10 bg-[#141b24]/88 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-[#1b2430] disabled:cursor-not-allowed disabled:opacity-60"
               onClick={() => onClearApiKey(provider.id)}
-              disabled={!provider.config.hasStoredSecret && !provider.config.apiKey}
+              disabled={!provider.config.hasStoredSecret && !provider.config.apiKey || saving}
             >
               Clear key
             </button>
@@ -189,11 +205,64 @@ export function ProviderCard({
             ) : null}
           </div>
         </div>
+      ) : provider.type === "addy" ? (
+        <div className="mt-4 grid gap-4">
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">API key</span>
+            <input
+              className={`${fieldClassName()} opacity-60`}
+              value=""
+              placeholder="Addy.io credentials will be enabled when this integration ships."
+              disabled
+              readOnly
+            />
+          </label>
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Alias domain</span>
+            <input
+              className={`${fieldClassName()} opacity-60`}
+              value=""
+              placeholder="Provider-specific settings will appear here."
+              disabled
+              readOnly
+            />
+          </label>
+        </div>
       ) : (
-        <div className="mt-4 rounded-[1.1rem] border border-white/10 bg-[#10161f] px-4 py-4 text-sm leading-6 text-slate-300">
-          Credential fields for {meta?.label ?? provider.type} will be added when that integration is built.
+        <div className="mt-4 grid gap-4">
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">API token</span>
+            <input
+              className={`${fieldClassName()} opacity-60`}
+              value=""
+              placeholder="Cloudflare routing credentials will be enabled when this integration ships."
+              disabled
+              readOnly
+            />
+          </label>
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Zone</span>
+            <input
+              className={`${fieldClassName()} opacity-60`}
+              value=""
+              placeholder="Zone and routing settings will appear here."
+              disabled
+              readOnly
+            />
+          </label>
         </div>
       )}
+
+      <div className="mt-5 flex justify-end">
+        <button
+          type="button"
+          className="rounded-[1.1rem] bg-linear-to-r from-[#c7924a] to-[#e0b777] px-4 py-2.5 text-sm font-semibold text-[#11161d] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+          onClick={() => void onSave(provider.id)}
+          disabled={saving}
+        >
+          {saving ? "Saving..." : "Save provider"}
+        </button>
+      </div>
     </article>
   );
 }

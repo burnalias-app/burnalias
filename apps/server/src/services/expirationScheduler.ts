@@ -106,7 +106,7 @@ export class ExpirationScheduler {
         historyPurgeIntervalMs: this.historyPurgeIntervalMs,
         providerSyncIntervalMs: this.providerSyncIntervalMs
       },
-      "Lifecycle scheduler started"
+      "Scheduler started"
     );
     this.timer = setInterval(() => {
       void this.runOnce();
@@ -119,7 +119,7 @@ export class ExpirationScheduler {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
-      log.info("Lifecycle scheduler stopped");
+      log.info("Scheduler stopped");
     }
   }
 
@@ -134,7 +134,10 @@ export class ExpirationScheduler {
     }
 
     if (expirationCount > 0 || purgedCount > 0) {
-      log.info({ expirationCount, purgedCount }, "Lifecycle run complete");
+      log.info(
+        { expirationCount, purgedCount },
+        `Lifecycle sweep completed: expired ${expirationCount}, purged ${purgedCount}.`
+      );
     }
 
     return expirationCount + purgedCount;
@@ -202,7 +205,7 @@ export class ExpirationScheduler {
         const { expiredCount, failedCount } = await this.expireAliases(nowIso);
         const summary =
           failedCount > 0
-            ? `Expired ${expiredCount} aliases. ${failedCount} expiration attempt${failedCount === 1 ? "" : "s"} failed.`
+            ? `Expired ${expiredCount} aliases; ${failedCount} expiration attempt${failedCount === 1 ? "" : "s"} failed.`
             : `Expired ${expiredCount} aliases.`;
         this.markJobFinished("expiration-sweep", "success", summary);
         return expiredCount;
@@ -294,9 +297,9 @@ export class ExpirationScheduler {
   }> {
     const expiringAliases = this.aliasRepository.listExpiring(nowIso);
     if (expiringAliases.length > 0) {
-      log.debug({ count: expiringAliases.length }, "Expiration check tick");
+      log.debug({ count: expiringAliases.length }, "Expiration sweep found aliases due for removal");
     } else {
-      log.trace("Expiration check tick");
+      log.trace("Expiration sweep found no aliases due");
     }
 
     let expiredCount = 0;

@@ -66,9 +66,6 @@ export interface AppSettings {
     providers: ConfiguredProvider[];
     activeProviderId: string | null;
   };
-  uiSettings: {
-    forwardAddresses: string[];
-  };
   lifecycleSettings: {
     historyRetentionDays: number;
   };
@@ -77,7 +74,7 @@ export interface AppSettings {
   };
 }
 
-export type ForwardAddressSource = "provider" | "settings" | "none";
+export type ForwardAddressSource = "provider" | "none";
 
 export interface ForwardAddressState {
   forwardAddresses: string[];
@@ -267,9 +264,6 @@ export async function updateSettings(settings: AppSettings): Promise<AppSettings
       providerSettings: {
         providers: settings.providerSettings.providers,
         activeProviderId: settings.providerSettings.activeProviderId
-      },
-      uiSettings: {
-        forwardAddresses: settings.uiSettings.forwardAddresses
       },
       lifecycleSettings: {
         historyRetentionDays: settings.lifecycleSettings.historyRetentionDays
