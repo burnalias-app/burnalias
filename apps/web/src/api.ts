@@ -20,7 +20,7 @@ export interface CreateAliasPayload {
   providerHint?: string | null;
 }
 
-export type ProviderType = "simplelogin" | "addy" | "cloudflare";
+export type ProviderType = "simplelogin" | "addy";
 
 export interface SupportedProviderDefinition {
   type: ProviderType;
@@ -44,9 +44,15 @@ export type ConfiguredProvider =
     }
   | {
       id: string;
-      type: "addy" | "cloudflare";
+      type: "addy";
       name: string;
-      config: Record<string, never>;
+      config: {
+        apiKey: string;
+        hasStoredSecret?: boolean;
+        clearStoredSecret?: boolean;
+        lastConnectionTestSucceededAt?: string | null;
+        lastConnectionTestVerificationToken?: string | null;
+      };
     };
 
 export interface SessionState {
@@ -95,6 +101,15 @@ export interface SchedulerJob {
   isRunning: boolean;
   lastOutcome: "idle" | "success" | "error";
   lastSummary: string | null;
+}
+
+export interface AuditHistoryEntry {
+  id: string;
+  aliasId: string;
+  aliasEmail: string | null;
+  eventType: string;
+  message: string;
+  createdAt: string;
 }
 
 let csrfToken: string | null = null;
@@ -167,6 +182,20 @@ export async function updateAliasExpiration(id: string, expiresInHours: number |
   return data.alias;
 }
 
+export async function updateAliasMetadata(
+  id: string,
+  payload: {
+    destinationEmail: string;
+    label: string | null;
+  }
+): Promise<Alias> {
+  const data = await request<{ alias: Alias }>(`/api/aliases/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+  return data.alias;
+}
+
 export async function setAliasEnabled(id: string, enabled: boolean): Promise<Alias> {
   const endpoint = enabled ? "enable" : "disable";
   const data = await request<{ alias: Alias }>(`/api/aliases/${id}/${endpoint}`, {
@@ -190,6 +219,11 @@ export async function syncAliases(): Promise<void> {
 export async function fetchJobs(): Promise<SchedulerJob[]> {
   const data = await request<{ jobs: SchedulerJob[] }>("/api/jobs");
   return data.jobs;
+}
+
+export async function fetchHistory(): Promise<AuditHistoryEntry[]> {
+  const data = await request<{ history: AuditHistoryEntry[] }>("/api/history");
+  return data.history;
 }
 
 export async function runJob(jobId: JobId): Promise<void> {

@@ -1,5 +1,6 @@
 import { Alias, ProviderAlias } from "../domain/alias";
 import { logger } from "../lib/logger";
+import { buildProviderNote } from "../lib/providerNotes";
 import { ProviderRegistry } from "../providers/providerRegistry";
 import { AliasRepository } from "../repositories/aliasRepository";
 import { AuditLogRepository } from "../repositories/auditLogRepository";
@@ -377,7 +378,7 @@ export class ExpirationScheduler {
       try {
         const provider = this.providerRegistry.getProvider(providerName);
         const remoteAliases = await provider.listAliases();
-        const stats = this.reconcileProviderState(providerAliases, remoteAliases);
+        const stats = await this.reconcileProviderState(providerAliases, remoteAliases);
         providersChecked += 1;
         aliasesUpdated += stats.aliasesUpdated;
         aliasesMarkedDeleted += stats.aliasesMarkedDeleted;
@@ -389,10 +390,10 @@ export class ExpirationScheduler {
     return { providersChecked, aliasesUpdated, aliasesMarkedDeleted };
   }
 
-  private reconcileProviderState(localAliases: Alias[], remoteAliases: ProviderAlias[]): {
+  private async reconcileProviderState(localAliases: Alias[], remoteAliases: ProviderAlias[]): Promise<{
     aliasesUpdated: number;
     aliasesMarkedDeleted: number;
-  } {
+  }> {
     const remoteById = new Map(remoteAliases.map((alias) => [alias.id, alias]));
     let aliasesUpdated = 0;
     let aliasesMarkedDeleted = 0;
@@ -412,6 +413,8 @@ export class ExpirationScheduler {
       }
 
       const nextStatus = remoteAlias.enabled ? "active" : "inactive";
+      let aliasUpdated = false;
+
       if (localAlias.status !== nextStatus) {
         this.aliasRepository.updateStatus(localAlias.id, nextStatus);
         this.auditLogRepository.create({
@@ -420,6 +423,53 @@ export class ExpirationScheduler {
           message: `Alias ${localAlias.email} reconciled to ${nextStatus} from provider state.`
         });
         log.info({ aliasId: localAlias.id, email: localAlias.email, status: nextStatus }, "Alias reconciled from provider state");
+        aliasUpdated = true;
+      }
+
+      const shouldPushDestination =
+        Boolean(localAlias.destinationEmail) && localAlias.destinationEmail !== remoteAlias.destinationEmail;
+      const shouldPushLabel = localAlias.label !== remoteAlias.label;
+
+      if (shouldPushDestination || shouldPushLabel) {
+        try {
+          const provider = this.providerRegistry.getProvider(localAlias.providerName);
+          await provider.updateAliasMetadata(localAlias.providerAliasId, {
+            note: buildProviderNote(localAlias.label, localAlias.expiresAt),
+            destinationEmail: shouldPushDestination ? localAlias.destinationEmail : undefined
+          });
+          if (shouldPushDestination) {
+            this.auditLogRepository.create({
+              aliasId: localAlias.id,
+              eventType: "alias.destination_pushed",
+              message: `Alias forward target pushed to provider: ${localAlias.destinationEmail}.`
+            });
+            log.info(
+              { aliasId: localAlias.id, email: localAlias.email, destinationEmail: localAlias.destinationEmail },
+              "Alias forward target pushed to provider state"
+            );
+          }
+          if (shouldPushLabel) {
+            this.auditLogRepository.create({
+              aliasId: localAlias.id,
+              eventType: "alias.label_pushed",
+              message: localAlias.label
+                ? `Alias label pushed back to provider description: ${localAlias.label}.`
+                : "Alias label cleared from provider description."
+            });
+            log.info({ aliasId: localAlias.id, email: localAlias.email, label: localAlias.label }, "Alias label pushed to provider description");
+          }
+          this.auditLogRepository.create({
+            aliasId: localAlias.id,
+            eventType: "alias.metadata_pushed",
+            message: "Alias metadata pushed from BurnAlias to provider."
+          });
+          aliasUpdated = true;
+        } catch (err) {
+          log.warn({ aliasId: localAlias.id, email: localAlias.email, err }, "Failed to push alias metadata to provider");
+        }
+      }
+
+      if (aliasUpdated) {
         aliasesUpdated += 1;
       }
     }

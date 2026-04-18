@@ -24,11 +24,17 @@ export interface ForwardTarget {
   isDefault: boolean;
 }
 
+export interface UpdateProviderAliasMetadataInput {
+  note?: string | null;
+  destinationEmail?: string;
+}
+
 export interface AliasProvider {
   readonly name: string;
   testConnection(): Promise<ConnectionTestResult>;
   listForwardTargets(): Promise<ForwardTarget[]>;
   createAlias(input: CreateProviderAliasInput): Promise<ProviderAlias>;
+  updateAliasMetadata(providerAliasId: string, input: UpdateProviderAliasMetadataInput): Promise<void>;
   disableAlias(providerAliasId: string): Promise<void>;
   enableAlias(providerAliasId: string): Promise<void>;
   deleteAlias(providerAliasId: string): Promise<void>;

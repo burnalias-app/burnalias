@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { AliasService, createAliasSchema } from "../services/aliasService";
+import { AliasService, createAliasSchema, updateAliasMetadataSchema } from "../services/aliasService";
 import { ExpirationScheduler } from "../services/expirationScheduler";
 
 const statusSchema = z.enum(["active", "inactive", "expired", "deleted"]);
@@ -84,6 +84,23 @@ export function createAliasRouter(aliasService: AliasService, scheduler: Expirat
       const status = error instanceof Error && error.message === "Alias not found" ? 404 : 400;
       return res.status(status).json({
         error: error instanceof Error ? error.message : "Unable to update expiration."
+      });
+    }
+  });
+
+  router.patch("/:id", async (req, res) => {
+    const parsed = updateAliasMetadataSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.flatten() });
+    }
+
+    try {
+      const alias = await aliasService.updateMetadata(req.params.id, parsed.data);
+      return res.json({ alias });
+    } catch (error) {
+      const status = error instanceof Error && error.message === "Alias not found" ? 404 : 400;
+      return res.status(status).json({
+        error: error instanceof Error ? error.message : "Unable to update alias details."
       });
     }
   });

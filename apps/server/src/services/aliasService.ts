@@ -2,6 +2,7 @@ import { z } from "zod";
 import { Alias, AliasStatus } from "../domain/alias";
 import { createId } from "../lib/id";
 import { logger } from "../lib/logger";
+import { buildProviderNote } from "../lib/providerNotes";
 import { ProviderRegistry } from "../providers/providerRegistry";
 import { AliasRepository } from "../repositories/aliasRepository";
 import { AuditLogRepository } from "../repositories/auditLogRepository";
@@ -21,19 +22,10 @@ export const createAliasSchema = z.object({
   providerHint: z.string().min(1).nullable().optional()
 });
 
-function buildProviderNote(label: string | null | undefined, expiresAt: string | null): string | null {
-  const parts: string[] = [];
-
-  if (label) {
-    parts.push(`Label: ${label}`);
-  }
-
-  if (expiresAt) {
-    parts.push(`BurnAlias expiration: ${expiresAt}`);
-  }
-
-  return parts.length > 0 ? parts.join(" | ") : null;
-}
+export const updateAliasMetadataSchema = z.object({
+  destinationEmail: z.string().email(),
+  label: z.string().max(64).nullable().optional()
+});
 
 export class AliasService {
   constructor(
@@ -164,6 +156,10 @@ export class AliasService {
       expiresInHours != null
         ? new Date(Date.now() + expiresInHours * 60 * 60 * 1000).toISOString()
         : null;
+    const provider = this.providerRegistry.getProvider(alias.providerName);
+    await provider.updateAliasMetadata(alias.providerAliasId, {
+      note: buildProviderNote(alias.label, expiresAt)
+    });
     this.aliasRepository.updateExpiration(id, expiresAt);
     this.auditLogRepository.create({
       aliasId: alias.id,
@@ -172,6 +168,46 @@ export class AliasService {
     });
     log.info({ aliasId: alias.id, email: alias.email, expiresAt }, "Alias expiration updated");
     return { ...alias, expiresAt };
+  }
+
+  async updateMetadata(id: string, input: z.infer<typeof updateAliasMetadataSchema>): Promise<Alias> {
+    const alias = this.aliasRepository.findById(id);
+    if (!alias) {
+      log.warn({ aliasId: id }, "Metadata update failed: alias not found");
+      throw new Error("Alias not found");
+    }
+
+    if (alias.status === "expired" || alias.status === "deleted") {
+      throw new Error("Cannot update metadata on a terminal alias.");
+    }
+
+    const nextLabel = input.label ?? null;
+    const nextDestinationEmail = input.destinationEmail;
+    const provider = this.providerRegistry.getProvider(alias.providerName);
+
+    await provider.updateAliasMetadata(alias.providerAliasId, {
+      note: buildProviderNote(nextLabel, alias.expiresAt),
+      destinationEmail: nextDestinationEmail
+    });
+
+    this.aliasRepository.updateDestinationEmail(alias.id, nextDestinationEmail);
+    this.aliasRepository.updateLabel(alias.id, nextLabel);
+    this.auditLogRepository.create({
+      aliasId: alias.id,
+      eventType: "alias.metadata_updated",
+      message: `Alias metadata updated. Forward target: ${nextDestinationEmail}. Label: ${nextLabel ?? "None"}.`
+    });
+
+    log.info(
+      { aliasId: alias.id, email: alias.email, destinationEmail: nextDestinationEmail, label: nextLabel },
+      "Alias metadata updated"
+    );
+
+    return {
+      ...alias,
+      destinationEmail: nextDestinationEmail,
+      label: nextLabel
+    };
   }
 
   listAuditLog(aliasId: string) {

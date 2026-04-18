@@ -27,8 +27,8 @@ type SettingsViewProps = {
   onSetActive: (providerId: string) => void;
   onSetActiveBlocked: (message: string) => void;
   onRenameProvider: (providerId: string, name: string) => void;
-  onApiKeyChange: (providerId: string, apiKey: string) => void;
-  onClearApiKey: (providerId: string) => void;
+  onSecretChange: (providerId: string, value: string) => void;
+  onClearSecret: (providerId: string) => void;
   onConnectionTestSuccess: (providerId: string, testedAt: string, verificationToken: string) => void;
   onHistoryRetentionDaysChange: (value: string) => void;
   onRefreshForwardTargets: () => Promise<void>;
@@ -48,8 +48,8 @@ export function SettingsView({
   onSetActive,
   onSetActiveBlocked,
   onRenameProvider,
-  onApiKeyChange,
-  onClearApiKey,
+  onSecretChange,
+  onClearSecret,
   onConnectionTestSuccess,
   onHistoryRetentionDaysChange,
   onRefreshForwardTargets,
@@ -69,10 +69,7 @@ export function SettingsView({
   }, [selectedProviderType, settingsForm.providers]);
 
   function isProviderReady(provider: ConfiguredProvider): boolean {
-    if (provider.type === "simplelogin") {
-      return Boolean(provider.config.hasStoredSecret) && Boolean(provider.config.lastConnectionTestSucceededAt);
-    }
-    return false;
+    return Boolean(provider.config.hasStoredSecret) && Boolean(provider.config.lastConnectionTestSucceededAt);
   }
 
   const selectedProvider =
@@ -164,8 +161,8 @@ export function SettingsView({
                   onSetActive={onSetActive}
                   onSetActiveBlocked={onSetActiveBlocked}
                   onRename={onRenameProvider}
-                  onApiKeyChange={onApiKeyChange}
-                  onClearApiKey={onClearApiKey}
+                  onSecretChange={onSecretChange}
+                  onClearSecret={onClearSecret}
                   onConnectionTestSuccess={onConnectionTestSuccess}
                   onSave={onSaveProvider}
                 />

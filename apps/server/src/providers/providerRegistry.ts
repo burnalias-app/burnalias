@@ -1,5 +1,6 @@
 import { logger } from "../lib/logger";
 import { ConfiguredProvider } from "./providerConfig";
+import { AddyProvider } from "./addyProvider";
 import { SimpleLoginProvider } from "./simpleLoginProvider";
 import { AliasPreviewResult, AliasProvider, ConnectionTestResult, ForwardTarget } from "./provider";
 import { SupportedProviderDefinition, supportedProviders, ProviderType } from "./providerCatalog";
@@ -17,9 +18,19 @@ export class ProviderRegistry {
     this.providers.clear();
 
     for (const config of configuredProviders) {
-      if (config.type === "simplelogin" && config.config.apiKey) {
-        this.providers.set("simplelogin", new SimpleLoginProvider(config.config.apiKey));
-        log.info({ provider: "simplelogin" }, "Provider registered");
+      switch (config.type) {
+        case "simplelogin":
+          if (config.config.apiKey) {
+            this.providers.set("simplelogin", new SimpleLoginProvider(config.config.apiKey));
+            log.info({ provider: "simplelogin" }, "Provider registered");
+          }
+          break;
+        case "addy":
+          if (config.config.apiKey) {
+            this.providers.set("addy", new AddyProvider(config.config.apiKey));
+            log.info({ provider: "addy" }, "Provider registered");
+          }
+          break;
       }
     }
   }
@@ -37,7 +48,13 @@ export class ProviderRegistry {
         const provider = new SimpleLoginProvider(config.apiKey);
         return provider.testConnection();
       }
-
+      case "addy": {
+        if (!config.apiKey) {
+          return { success: false, message: "API key is required." };
+        }
+        const provider = new AddyProvider(config.apiKey);
+        return provider.testConnection();
+      }
       default:
         return { success: false, message: `Connection testing is not yet available for ${type}.` };
     }
@@ -52,11 +69,18 @@ export class ProviderRegistry {
   }
 
   async getAliasPreview(type: ProviderType): Promise<AliasPreviewResult | null> {
-    if (type === "simplelogin") {
-      const provider = this.providers.get("simplelogin") as SimpleLoginProvider | undefined;
-      return (await provider?.getAliasPreview()) ?? null;
+    switch (type) {
+      case "simplelogin": {
+        const provider = this.providers.get("simplelogin") as SimpleLoginProvider | undefined;
+        return (await provider?.getAliasPreview()) ?? null;
+      }
+      case "addy": {
+        const provider = this.providers.get("addy") as AddyProvider | undefined;
+        return (await provider?.getAliasPreview()) ?? null;
+      }
+      default:
+        return null;
     }
-    return null;
   }
 
   async getForwardTargets(type: ProviderType): Promise<ForwardTarget[]> {

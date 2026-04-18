@@ -1,4 +1,4 @@
-export type ProviderType = "simplelogin" | "addy" | "cloudflare";
+export type ProviderType = "simplelogin" | "addy";
 
 export interface SupportedProviderDefinition {
   type: ProviderType;
@@ -18,12 +18,6 @@ export const supportedProviders: SupportedProviderDefinition[] = [
     type: "addy",
     label: "Addy.io",
     description: "Third-party alias routing through Addy.io / AnonAddy.",
-    implemented: false
-  },
-  {
-    type: "cloudflare",
-    label: "Cloudflare Email Routing",
-    description: "Alias routing through Cloudflare Email Routing.",
-    implemented: false
+    implemented: true
   }
 ];

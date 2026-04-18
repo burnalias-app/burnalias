@@ -6,9 +6,16 @@ import { Modal } from "./Modal";
 type AliasCardProps = {
   alias: Alias;
   providerRemovedFromApp?: boolean;
-  onToggle: (alias: Alias) => Promise<void>;
+  forwardAddresses: string[];
   onDelete: (id: string) => Promise<void>;
-  onUpdateExpiration: (id: string, expiresInHours: number | null) => Promise<void>;
+  onUpdateAlias: (payload: {
+    id: string;
+    destinationEmail: string;
+    label: string | null;
+    enabled: boolean;
+    expiresInHours: number | null;
+    clearExpiration: boolean;
+  }) => Promise<void>;
 };
 
 const statusStyles: Record<Alias["status"], string> = {
@@ -18,36 +25,52 @@ const statusStyles: Record<Alias["status"], string> = {
   deleted: "bg-red-500/12 text-red-200"
 };
 
-export function AliasCard({ alias, providerRemovedFromApp = false, onToggle, onDelete, onUpdateExpiration }: AliasCardProps) {
+export function AliasCard({
+  alias,
+  providerRemovedFromApp = false,
+  forwardAddresses,
+  onDelete,
+  onUpdateAlias
+}: AliasCardProps) {
   const isTerminal = alias.status === "expired" || alias.status === "deleted";
-  const [editingExpiration, setEditingExpiration] = useState(false);
+  const expirationLabel = alias.status === "expired" ? "Expired" : "Expires";
+  const [editingAlias, setEditingAlias] = useState(false);
   const [expAmount, setExpAmount] = useState("30");
   const [expUnit, setExpUnit] = useState<"h" | "d">("d");
+  const [editDestinationEmail, setEditDestinationEmail] = useState(alias.destinationEmail);
+  const [editLabel, setEditLabel] = useState(alias.label ?? "");
+  const [editEnabled, setEditEnabled] = useState(alias.status === "active");
   const [saving, setSaving] = useState(false);
 
-  function openExpirationModal() {
-    setExpAmount("30");
+  function openEditModal() {
+    setEditDestinationEmail(alias.destinationEmail);
+    setEditLabel(alias.label ?? "");
+    setEditEnabled(alias.status === "active");
+    setExpAmount("");
     setExpUnit("d");
-    setEditingExpiration(true);
+    setEditingAlias(true);
   }
 
-  async function handleSaveExpiration() {
-    const hours = expUnit === "d" ? Number(expAmount) * 24 : Number(expAmount);
-    if (!hours || hours < 1) return;
+  async function handleSaveAlias() {
+    if (!editDestinationEmail) return;
     setSaving(true);
     try {
-      await onUpdateExpiration(alias.id, hours);
-      setEditingExpiration(false);
-    } finally {
-      setSaving(false);
-    }
-  }
+      const expiresInHours =
+        !expAmount.trim()
+          ? null
+          : expUnit === "d"
+            ? Number(expAmount) * 24
+            : Number(expAmount);
 
-  async function handleClearExpiration() {
-    setSaving(true);
-    try {
-      await onUpdateExpiration(alias.id, null);
-      setEditingExpiration(false);
+      await onUpdateAlias({
+        id: alias.id,
+        destinationEmail: editDestinationEmail,
+        label: editLabel.trim() ? editLabel.trim() : null,
+        enabled: editEnabled,
+        expiresInHours,
+        clearExpiration: false
+      });
+      setEditingAlias(false);
     } finally {
       setSaving(false);
     }
@@ -72,16 +95,7 @@ export function AliasCard({ alias, providerRemovedFromApp = false, onToggle, onD
           </div>
           <div>
             <dt className="flex items-center gap-2">
-              <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Expires</span>
-              {!isTerminal ? (
-                <button
-                  type="button"
-                  className="text-[11px] text-[#d7a968]/80 transition hover:text-[#d7a968]"
-                  onClick={openExpirationModal}
-                >
-                  edit
-                </button>
-              ) : null}
+              <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">{expirationLabel}</span>
             </dt>
             <dd className="mt-1 text-sm text-slate-200">{formatDate(alias.expiresAt)}</dd>
           </div>
@@ -115,9 +129,9 @@ export function AliasCard({ alias, providerRemovedFromApp = false, onToggle, onD
             <button
               type="button"
               className="w-full rounded-[1.1rem] border border-white/10 bg-[#141b24]/88 px-4 py-3 text-sm font-medium text-white transition hover:bg-[#1b2430] sm:w-auto"
-              onClick={() => void onToggle(alias)}
+              onClick={openEditModal}
             >
-              {alias.status === "active" ? "Set inactive" : "Set active"}
+              Edit
             </button>
             <button
               type="button"
@@ -134,16 +148,67 @@ export function AliasCard({ alias, providerRemovedFromApp = false, onToggle, onD
         ) : null}
       </article>
 
-      {editingExpiration ? (
-        <Modal title="Edit expiration" onClose={() => setEditingExpiration(false)}>
+      {editingAlias ? (
+        <Modal title="Edit alias" onClose={() => setEditingAlias(false)}>
           <p className="mb-4 wrap-break-word text-sm text-slate-400">{alias.email}</p>
 
           <div className="grid gap-4">
+            <label className="flex items-center justify-between gap-4 rounded-[1.1rem] border border-white/10 bg-[#141b24]/88 px-4 py-3">
+              <div>
+                <span className="block text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Alias status</span>
+                <span className="mt-1 block text-sm text-slate-300">{editEnabled ? "Active and forwarding" : "Inactive and paused"}</span>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={editEnabled}
+                onClick={() => setEditEnabled((cur) => !cur)}
+                className={[
+                  "relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition",
+                  editEnabled ? "bg-emerald-500/80" : "bg-slate-600/80"
+                ].join(" ")}
+              >
+                <span
+                  className={[
+                    "inline-block h-5 w-5 rounded-full bg-white transition",
+                    editEnabled ? "translate-x-6" : "translate-x-1"
+                  ].join(" ")}
+                />
+              </button>
+            </label>
+
             <label className="grid gap-2">
-              <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">New expiration from now</span>
+              <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Forward to</span>
+              <select
+                className="rounded-[1.1rem] border border-white/10 bg-[#141b24] px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-[#d7a968]/50 focus:ring-2 focus:ring-[#d7a968]/20 disabled:opacity-50"
+                value={editDestinationEmail}
+                onChange={(e) => setEditDestinationEmail(e.target.value)}
+                disabled={forwardAddresses.length === 0}
+              >
+                {forwardAddresses.map((address) => (
+                  <option key={address} value={address}>
+                    {address}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="grid gap-2">
+              <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Label</span>
+              <input
+                className="rounded-[1.1rem] border border-white/10 bg-[#141b24] px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-[#d7a968]/50 focus:ring-2 focus:ring-[#d7a968]/20"
+                value={editLabel}
+                onChange={(e) => setEditLabel(e.target.value)}
+                placeholder="shopping"
+                autoFocus
+              />
+            </label>
+
+            <div className="grid gap-2">
+              <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Expiration</span>
               <div className="flex gap-2">
                 <input
-                  className="min-w-0 rounded-[1.1rem] border border-white/10 bg-[#141b24] px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-[#d7a968]/50 focus:ring-2 focus:ring-[#d7a968]/20"
+                  className="min-w-0 rounded-[1.1rem] border border-white/10 bg-[#141b24] px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-[#d7a968]/50 focus:ring-2 focus:ring-[#d7a968]/20 disabled:opacity-50"
                   type="number"
                   min="1"
                   step="1"
@@ -152,7 +217,7 @@ export function AliasCard({ alias, providerRemovedFromApp = false, onToggle, onD
                   autoFocus
                 />
                 <select
-                  className="w-24 shrink-0 rounded-[1.1rem] border border-white/10 bg-[#141b24] px-3 py-3 text-sm text-slate-100 outline-none transition focus:border-[#d7a968]/50"
+                  className="w-24 shrink-0 rounded-[1.1rem] border border-white/10 bg-[#141b24] px-3 py-3 text-sm text-slate-100 outline-none transition focus:border-[#d7a968]/50 disabled:opacity-50"
                   value={expUnit}
                   onChange={(e) => setExpUnit(e.target.value as "h" | "d")}
                 >
@@ -160,13 +225,13 @@ export function AliasCard({ alias, providerRemovedFromApp = false, onToggle, onD
                   <option value="d">days</option>
                 </select>
               </div>
-            </label>
+            </div>
 
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
-                disabled={saving}
-                onClick={() => void handleSaveExpiration()}
+                disabled={saving || forwardAddresses.length === 0}
+                onClick={() => void handleSaveAlias()}
                 className="rounded-[1.1rem] bg-linear-to-r from-[#c7924a] to-[#e0b777] px-5 py-2.5 text-sm font-semibold text-[#11161d] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {saving ? "Saving..." : "Save"}
@@ -174,18 +239,10 @@ export function AliasCard({ alias, providerRemovedFromApp = false, onToggle, onD
               <button
                 type="button"
                 disabled={saving}
-                onClick={() => setEditingExpiration(false)}
+                onClick={() => setEditingAlias(false)}
                 className="rounded-[1.1rem] border border-white/10 bg-[#141b24]/88 px-5 py-2.5 text-sm font-medium text-slate-300 transition hover:bg-[#1b2430] disabled:opacity-50"
               >
                 Cancel
-              </button>
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() => void handleClearExpiration()}
-                className="rounded-[1.1rem] border border-red-400/20 bg-red-500/10 px-5 py-2.5 text-sm font-medium text-red-200 transition hover:bg-red-500/15 disabled:opacity-50"
-              >
-                Clear expiration
               </button>
             </div>
           </div>

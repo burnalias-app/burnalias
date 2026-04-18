@@ -4,6 +4,7 @@ import { ProviderRegistry } from "../providers/providerRegistry";
 import { ProviderType } from "../providers/providerCatalog";
 import { createSecretVerificationToken } from "../lib/secrets";
 import { ExpirationScheduler, SchedulerJobId } from "../services/expirationScheduler";
+import { AuditLogRepository } from "../repositories/auditLogRepository";
 import { SettingsService, updateSettingsSchema } from "../services/settingsService";
 
 const testConnectionSchema = z.discriminatedUnion("type", [
@@ -13,11 +14,7 @@ const testConnectionSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("addy"),
-    config: z.object({})
-  }),
-  z.object({
-    type: z.literal("cloudflare"),
-    config: z.object({})
+    config: z.object({ apiKey: z.string().min(1, "API key is required.") })
   })
 ]);
 
@@ -28,7 +25,8 @@ const runJobSchema = z.object({
 export function createMetaRouter(
   providerRegistry: ProviderRegistry,
   settingsService: SettingsService,
-  scheduler: ExpirationScheduler
+  scheduler: ExpirationScheduler,
+  auditLogRepository: AuditLogRepository
 ): Router {
   const router = Router();
 
@@ -46,11 +44,16 @@ export function createMetaRouter(
       parsed.data.type as ProviderType,
       parsed.data.config as Record<string, string>
     );
-    if (
-      result.success &&
-      parsed.data.type === "simplelogin" &&
-      "apiKey" in parsed.data.config
-    ) {
+    if (result.success && parsed.data.type === "simplelogin" && "apiKey" in parsed.data.config) {
+      const testedAt = new Date().toISOString();
+      return res.json({
+        ...result,
+        testedAt,
+        verificationToken: createSecretVerificationToken(parsed.data.config.apiKey)
+      });
+    }
+
+    if (result.success && parsed.data.type === "addy" && "apiKey" in parsed.data.config) {
       const testedAt = new Date().toISOString();
       return res.json({
         ...result,
@@ -129,6 +132,10 @@ export function createMetaRouter(
 
   router.get("/jobs", (_req, res) => {
     return res.json({ jobs: scheduler.listJobs() });
+  });
+
+  router.get("/history", (_req, res) => {
+    return res.json({ history: auditLogRepository.listRecent(150) });
   });
 
   router.post("/jobs/:jobId/run", async (req, res) => {

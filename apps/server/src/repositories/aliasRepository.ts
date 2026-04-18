@@ -105,6 +105,26 @@ export class AliasRepository {
       .run(expiresAt, id);
   }
 
+  updateDestinationEmail(id: string, destinationEmail: string): void {
+    this.db
+      .prepare(`
+        UPDATE aliases
+        SET destination_email = ?
+        WHERE id = ?
+      `)
+      .run(destinationEmail, id);
+  }
+
+  updateLabel(id: string, label: string | null): void {
+    this.db
+      .prepare(`
+        UPDATE aliases
+        SET label = ?
+        WHERE id = ?
+      `)
+      .run(label, id);
+  }
+
   updateStatus(id: string, status: AliasStatus, statusChangedAt = new Date().toISOString()): void {
     this.db
       .prepare(`

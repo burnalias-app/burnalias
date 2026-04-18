@@ -9,6 +9,10 @@ export interface AuditLog {
   createdAt: string;
 }
 
+export interface AuditHistoryEntry extends AuditLog {
+  aliasEmail: string | null;
+}
+
 export class AuditLogRepository {
   constructor(private readonly db: Database.Database) {}
 
@@ -45,6 +49,24 @@ export class AuditLogRepository {
         ORDER BY created_at DESC
       `)
       .all(aliasId) as AuditLog[];
+  }
+
+  listRecent(limit = 100): AuditHistoryEntry[] {
+    return this.db
+      .prepare(`
+        SELECT
+          audit_logs.id as id,
+          audit_logs.alias_id as aliasId,
+          audit_logs.event_type as eventType,
+          audit_logs.message as message,
+          audit_logs.created_at as createdAt,
+          aliases.email as aliasEmail
+        FROM audit_logs
+        LEFT JOIN aliases ON aliases.id = audit_logs.alias_id
+        ORDER BY audit_logs.created_at DESC
+        LIMIT ?
+      `)
+      .all(limit) as AuditHistoryEntry[];
   }
 
   deleteForAlias(aliasId: string): void {

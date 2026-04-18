@@ -1,8 +1,10 @@
-import { SchedulerJob } from "../api";
+import { AuditHistoryEntry, SchedulerJob } from "../api";
 import { formatDate, formatInterval, panelClassName } from "../lib/utils";
+import { useState } from "react";
 
 type JobsViewProps = {
   jobs: SchedulerJob[];
+  history: AuditHistoryEntry[];
   loading: boolean;
   error: string | null;
   runningJobId: string | null;
@@ -15,7 +17,9 @@ const outcomeStyles: Record<SchedulerJob["lastOutcome"], string> = {
   error: "bg-red-500/12 text-red-200"
 };
 
-export function JobsView({ jobs, loading, error, runningJobId, onRunJob }: JobsViewProps) {
+export function JobsView({ jobs, history, loading, error, runningJobId, onRunJob }: JobsViewProps) {
+  const [view, setView] = useState<"jobs" | "history">("jobs");
+
   return (
     <section className={panelClassName("p-5 sm:p-6")}>
       <div className="mb-6">
@@ -23,6 +27,23 @@ export function JobsView({ jobs, loading, error, runningJobId, onRunJob }: JobsV
         <p className="mt-2 text-sm leading-6 text-slate-300">
           Track lifecycle and synchronization tasks, see when they last ran, and trigger them manually when needed.
         </p>
+        <div className="mt-4 inline-flex rounded-full border border-white/10 bg-[#141b24]/88 p-1">
+          {(["jobs", "history"] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => setView(option)}
+              className={[
+                "rounded-full px-4 py-2 text-sm capitalize transition",
+                view === option
+                  ? "bg-[#e7edf5] text-[#121822]"
+                  : "text-slate-200 hover:bg-[#1b2430]"
+              ].join(" ")}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
       </div>
 
       {error ? (
@@ -33,9 +54,9 @@ export function JobsView({ jobs, loading, error, runningJobId, onRunJob }: JobsV
 
       {loading ? (
         <div className="rounded-[1.1rem] border border-white/10 bg-[#141b24]/85 px-4 py-8 text-center text-slate-300">
-          Loading jobs...
+          Loading {view}...
         </div>
-      ) : (
+      ) : view === "jobs" ? (
         <div className="grid gap-4 lg:grid-cols-2">
           {jobs.map((job) => {
             const isRunning = runningJobId === job.id || job.isRunning;
@@ -59,7 +80,7 @@ export function JobsView({ jobs, loading, error, runningJobId, onRunJob }: JobsV
 
                   <button
                     type="button"
-                    className="rounded-[1.1rem] border border-white/10 bg-[#141b24]/88 px-4 py-3 text-sm font-medium text-white transition hover:bg-[#1b2430] disabled:cursor-not-allowed disabled:opacity-60"
+                    className="w-full shrink-0 rounded-[1.1rem] border border-white/10 bg-[#141b24]/88 px-4 py-3 text-sm font-medium text-white transition hover:bg-[#1b2430] disabled:cursor-not-allowed disabled:opacity-60 sm:w-32"
                     onClick={() => void onRunJob(job.id)}
                     disabled={isRunning}
                   >
@@ -92,6 +113,33 @@ export function JobsView({ jobs, loading, error, runningJobId, onRunJob }: JobsV
               </article>
             );
           })}
+        </div>
+      ) : history.length === 0 ? (
+        <div className="rounded-[1.1rem] border border-white/10 bg-[#141b24]/85 px-4 py-8 text-center text-slate-300">
+          No history recorded yet.
+        </div>
+      ) : (
+        <div className="max-h-[70vh] overflow-y-auto pr-1">
+          <div className="grid gap-3">
+            {history.map((entry) => (
+              <article key={entry.id} className={panelClassName("p-4 sm:p-5")}>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="inline-flex rounded-full border border-white/10 bg-[#141b24]/88 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300">
+                        {entry.eventType}
+                      </span>
+                      {entry.aliasEmail ? (
+                        <span className="break-words text-sm text-slate-200">{entry.aliasEmail}</span>
+                      ) : null}
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-slate-300">{entry.message}</p>
+                  </div>
+                  <span className="shrink-0 text-sm text-slate-400">{formatDate(entry.createdAt)}</span>
+                </div>
+              </article>
+            ))}
+          </div>
         </div>
       )}
     </section>

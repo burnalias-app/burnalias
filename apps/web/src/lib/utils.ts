@@ -83,7 +83,31 @@ export function buildProviderDraft(
     };
   }
 
-  return { ...shared, type, config: {} };
+  if (type === "addy") {
+    return {
+      ...shared,
+      type,
+      config: {
+        apiKey: "",
+        hasStoredSecret: false,
+        clearStoredSecret: false,
+        lastConnectionTestSucceededAt: null,
+        lastConnectionTestVerificationToken: null
+      }
+    };
+  }
+
+  return {
+    ...shared,
+    type,
+    config: {
+      apiKey: "",
+      hasStoredSecret: false,
+      clearStoredSecret: false,
+      lastConnectionTestSucceededAt: null,
+      lastConnectionTestVerificationToken: null
+    }
+  };
 }
 
 export function configuredProviderLabel(

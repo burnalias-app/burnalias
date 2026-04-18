@@ -87,20 +87,7 @@ export class SettingsService {
       ...internalSettings,
       providerSettings: {
         ...internalSettings.providerSettings,
-        providers: internalSettings.providerSettings.providers.map((provider) =>
-          provider.type === "simplelogin"
-            ? {
-                ...provider,
-                config: {
-                  apiKey: "",
-                  hasStoredSecret: Boolean(provider.config.apiKey),
-                  clearStoredSecret: false,
-                  lastConnectionTestSucceededAt: provider.config.lastConnectionTestSucceededAt ?? null,
-                  lastConnectionTestVerificationToken: null
-                }
-              }
-            : provider
-        )
+        providers: internalSettings.providerSettings.providers.map((provider) => this.maskProvider(provider))
       }
     };
   }
@@ -170,58 +157,11 @@ export class SettingsService {
 
     const normalizedProviders = input.providerSettings.providers.map((provider) => {
       if (provider.type === "simplelogin") {
-        const existingProvider = existingProviders.find(
-          (item) => item.id === provider.id && item.type === "simplelogin"
-        );
-        const shouldClearSecret = provider.config.clearStoredSecret ?? false;
-        const typedApiKey = provider.config.apiKey.trim();
-        const existingApiKey =
-          existingProvider?.type === "simplelogin" ? existingProvider.config.apiKey : "";
-        const nextApiKey = shouldClearSecret
-          ? ""
-          : typedApiKey
-            ? typedApiKey
-            : existingApiKey;
-        const hasNewTypedApiKey = Boolean(typedApiKey);
-        const existingLastSuccessfulTest =
-          existingProvider?.type === "simplelogin"
-            ? (existingProvider.config.lastConnectionTestSucceededAt ?? null)
-            : null;
-        const existingVerificationToken =
-          existingProvider?.type === "simplelogin"
-            ? (existingProvider.config.lastConnectionTestVerificationToken ?? null)
-            : null;
-        const providedVerificationToken = provider.config.lastConnectionTestVerificationToken ?? null;
-        const hasVerifiedReplacementKey =
-          hasNewTypedApiKey &&
-          Boolean(provider.config.lastConnectionTestSucceededAt) &&
-          Boolean(providedVerificationToken) &&
-          providedVerificationToken === createSecretVerificationToken(typedApiKey);
-        const lastConnectionTestSucceededAt = shouldClearSecret
-          ? null
-          : hasVerifiedReplacementKey
-            ? (provider.config.lastConnectionTestSucceededAt ?? null)
-            : hasNewTypedApiKey
-              ? null
-              : existingLastSuccessfulTest;
-        const lastConnectionTestVerificationToken = shouldClearSecret
-          ? null
-          : hasVerifiedReplacementKey
-            ? providedVerificationToken
-            : hasNewTypedApiKey
-              ? null
-              : existingVerificationToken;
+        return this.normalizeSimpleLoginProvider(provider, existingProviders);
+      }
 
-        return {
-          ...provider,
-          config: {
-            apiKey: nextApiKey ? encryptSecret(nextApiKey) : "",
-            hasStoredSecret: Boolean(nextApiKey),
-            clearStoredSecret: false,
-            lastConnectionTestSucceededAt,
-            lastConnectionTestVerificationToken
-          }
-        };
+      if (provider.type === "addy") {
+        return this.normalizeAddyProvider(provider, existingProviders);
       }
 
       return provider;
@@ -279,36 +219,191 @@ export class SettingsService {
     }
 
     return parsed.data.map((provider) => {
-      if (provider.type !== "simplelogin") {
-        return provider;
+      if (provider.type === "simplelogin") {
+        const decryptedApiKey = provider.config.apiKey ? decryptSecret(provider.config.apiKey) : "";
+        return {
+          ...provider,
+          config: {
+            apiKey: decryptedApiKey,
+            hasStoredSecret: Boolean(decryptedApiKey),
+            clearStoredSecret: false,
+            lastConnectionTestSucceededAt: provider.config.lastConnectionTestSucceededAt ?? null,
+            lastConnectionTestVerificationToken: provider.config.lastConnectionTestVerificationToken ?? null
+          }
+        };
       }
 
-      const decryptedApiKey = provider.config.apiKey ? decryptSecret(provider.config.apiKey) : "";
-      return {
-        ...provider,
-        config: {
-          apiKey: decryptedApiKey,
-          hasStoredSecret: Boolean(decryptedApiKey),
-          clearStoredSecret: false,
-          lastConnectionTestSucceededAt: provider.config.lastConnectionTestSucceededAt ?? null,
-          lastConnectionTestVerificationToken: provider.config.lastConnectionTestVerificationToken ?? null
-        }
-      };
+      if (provider.type === "addy") {
+        const decryptedApiKey = provider.config.apiKey ? decryptSecret(provider.config.apiKey) : "";
+        return {
+          ...provider,
+          config: {
+            apiKey: decryptedApiKey,
+            hasStoredSecret: Boolean(decryptedApiKey),
+            clearStoredSecret: false,
+            lastConnectionTestSucceededAt: provider.config.lastConnectionTestSucceededAt ?? null,
+            lastConnectionTestVerificationToken: provider.config.lastConnectionTestVerificationToken ?? null
+          }
+        };
+      }
+
+      return provider;
     });
   }
 
   private isProviderReady(provider: ConfiguredProvider): boolean {
     if (provider.type === "simplelogin") {
-      const providerApiKey = decryptSecret(provider.config.apiKey);
-      const hasSecret = Boolean(providerApiKey);
-      const hasSuccessfulTest = Boolean(provider.config.lastConnectionTestSucceededAt);
-      const hasMatchingVerificationToken =
-        Boolean(provider.config.lastConnectionTestVerificationToken) &&
-        provider.config.lastConnectionTestVerificationToken ===
-          createSecretVerificationToken(providerApiKey);
-      return hasSecret && hasSuccessfulTest && hasMatchingVerificationToken;
+      return this.hasVerifiedProviderSecret(provider, decryptSecret(provider.config.apiKey));
+    }
+
+    if (provider.type === "addy") {
+      return this.hasVerifiedProviderSecret(provider, decryptSecret(provider.config.apiKey));
     }
 
     return false;
   }
+
+  private maskProvider(provider: ConfiguredProvider): ConfiguredProvider {
+    if (provider.type === "simplelogin") {
+      return {
+        ...provider,
+        config: {
+          apiKey: "",
+          hasStoredSecret: Boolean(provider.config.apiKey),
+          clearStoredSecret: false,
+          lastConnectionTestSucceededAt: provider.config.lastConnectionTestSucceededAt ?? null,
+          lastConnectionTestVerificationToken: null
+        }
+      };
+    }
+
+    if (provider.type === "addy") {
+      return {
+        ...provider,
+        config: {
+          apiKey: "",
+          hasStoredSecret: Boolean(provider.config.apiKey),
+          clearStoredSecret: false,
+          lastConnectionTestSucceededAt: provider.config.lastConnectionTestSucceededAt ?? null,
+          lastConnectionTestVerificationToken: null
+        }
+      };
+    }
+
+    return provider;
+  }
+
+  private normalizeSimpleLoginProvider(
+    provider: Extract<ConfiguredProvider, { type: "simplelogin" }>,
+    existingProviders: ConfiguredProvider[]
+  ): Extract<ConfiguredProvider, { type: "simplelogin" }> {
+    const existingProvider = existingProviders.find(
+      (item) => item.id === provider.id && item.type === "simplelogin"
+    );
+    const shouldClearSecret = provider.config.clearStoredSecret ?? false;
+    const typedApiKey = provider.config.apiKey.trim();
+    const existingApiKey = existingProvider?.type === "simplelogin" ? existingProvider.config.apiKey : "";
+    const nextApiKey = shouldClearSecret ? "" : typedApiKey || existingApiKey;
+    const hasNewTypedApiKey = Boolean(typedApiKey);
+    const existingLastSuccessfulTest =
+      existingProvider?.type === "simplelogin"
+        ? (existingProvider.config.lastConnectionTestSucceededAt ?? null)
+        : null;
+    const existingVerificationToken =
+      existingProvider?.type === "simplelogin"
+        ? (existingProvider.config.lastConnectionTestVerificationToken ?? null)
+        : null;
+    const providedVerificationToken = provider.config.lastConnectionTestVerificationToken ?? null;
+    const verificationMaterial = typedApiKey;
+    const hasVerifiedReplacementKey =
+      hasNewTypedApiKey &&
+      Boolean(provider.config.lastConnectionTestSucceededAt) &&
+      Boolean(providedVerificationToken) &&
+      providedVerificationToken === createSecretVerificationToken(verificationMaterial);
+
+    return {
+      ...provider,
+      config: {
+        apiKey: nextApiKey ? encryptSecret(nextApiKey) : "",
+        hasStoredSecret: Boolean(nextApiKey),
+        clearStoredSecret: false,
+        lastConnectionTestSucceededAt: shouldClearSecret
+          ? null
+          : hasVerifiedReplacementKey
+            ? (provider.config.lastConnectionTestSucceededAt ?? null)
+            : hasNewTypedApiKey
+              ? null
+              : existingLastSuccessfulTest,
+        lastConnectionTestVerificationToken: shouldClearSecret
+          ? null
+          : hasVerifiedReplacementKey
+            ? providedVerificationToken
+            : hasNewTypedApiKey
+              ? null
+              : existingVerificationToken
+      }
+    };
+  }
+
+  private normalizeAddyProvider(
+    provider: Extract<ConfiguredProvider, { type: "addy" }>,
+    existingProviders: ConfiguredProvider[]
+  ): Extract<ConfiguredProvider, { type: "addy" }> {
+    const existingProvider = existingProviders.find(
+      (item) => item.id === provider.id && item.type === "addy"
+    );
+    const shouldClearSecret = provider.config.clearStoredSecret ?? false;
+    const typedApiKey = provider.config.apiKey.trim();
+    const existingApiKey = existingProvider?.type === "addy" ? existingProvider.config.apiKey : "";
+    const nextApiKey = shouldClearSecret ? "" : typedApiKey || existingApiKey;
+    const hasNewTypedApiKey = Boolean(typedApiKey);
+    const existingLastSuccessfulTest =
+      existingProvider?.type === "addy"
+        ? (existingProvider.config.lastConnectionTestSucceededAt ?? null)
+        : null;
+    const existingVerificationToken =
+      existingProvider?.type === "addy"
+        ? (existingProvider.config.lastConnectionTestVerificationToken ?? null)
+        : null;
+    const providedVerificationToken = provider.config.lastConnectionTestVerificationToken ?? null;
+    const hasVerifiedReplacementKey =
+      hasNewTypedApiKey &&
+      Boolean(provider.config.lastConnectionTestSucceededAt) &&
+      Boolean(providedVerificationToken) &&
+      providedVerificationToken === createSecretVerificationToken(typedApiKey);
+
+    return {
+      ...provider,
+      config: {
+        apiKey: nextApiKey ? encryptSecret(nextApiKey) : "",
+        hasStoredSecret: Boolean(nextApiKey),
+        clearStoredSecret: false,
+        lastConnectionTestSucceededAt: shouldClearSecret
+          ? null
+          : hasVerifiedReplacementKey
+            ? (provider.config.lastConnectionTestSucceededAt ?? null)
+            : hasNewTypedApiKey
+              ? null
+              : existingLastSuccessfulTest,
+        lastConnectionTestVerificationToken: shouldClearSecret
+          ? null
+          : hasVerifiedReplacementKey
+            ? providedVerificationToken
+            : hasNewTypedApiKey
+              ? null
+              : existingVerificationToken
+      }
+    };
+  }
+
+  private hasVerifiedProviderSecret(provider: ConfiguredProvider, verificationMaterial: string): boolean {
+    const hasSecret = Boolean(verificationMaterial);
+    const hasSuccessfulTest = Boolean(provider.config.lastConnectionTestSucceededAt);
+    const hasMatchingVerificationToken =
+      Boolean(provider.config.lastConnectionTestVerificationToken) &&
+      provider.config.lastConnectionTestVerificationToken ===
+        createSecretVerificationToken(verificationMaterial);
+    return hasSecret && hasSuccessfulTest && hasMatchingVerificationToken;
+  }
+
 }

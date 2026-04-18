@@ -10,7 +10,12 @@ function columnExists(db: Database.Database, tableName: string, columnName: stri
   return columns.some((column) => column.name === columnName);
 }
 
-function migrateLegacyMockProvider(db: Database.Database): void {
+function migrateRemovedProviders(
+  db: Database.Database,
+  removedProviderTypes: string[],
+  eventType: string,
+  messageBuilder: (providerType: string, email: string) => string
+): void {
   const settingsRow = db
     .prepare(`
       SELECT providers_json, active_provider_id
@@ -30,17 +35,20 @@ function migrateLegacyMockProvider(db: Database.Database): void {
     // Ignore malformed JSON and leave provider cleanup to later validation paths.
   }
 
-  const hasMockProvider = providers.some((provider) => provider.type === "mock");
-  const mockAliases = db
-    .prepare(`
-      SELECT id, email
-      FROM aliases
-      WHERE provider_name = 'mock'
-        AND status IN ('active', 'inactive')
-    `)
-    .all() as Array<{ id: string; email: string }>;
+  const removedProviders = providers.filter((provider) => removedProviderTypes.includes(provider.type));
+  const placeholders = removedProviderTypes.map(() => "?").join(", ");
+  const affectedAliases = removedProviderTypes.length
+    ? (db
+        .prepare(`
+          SELECT id, email, provider_name
+          FROM aliases
+          WHERE provider_name IN (${placeholders})
+            AND status IN ('active', 'inactive')
+        `)
+        .all(...removedProviderTypes) as Array<{ id: string; email: string; provider_name: string }>)
+    : [];
 
-  if (!hasMockProvider && mockAliases.length === 0) {
+  if (removedProviders.length === 0 && affectedAliases.length === 0) {
     return;
   }
 
@@ -63,19 +71,19 @@ function migrateLegacyMockProvider(db: Database.Database): void {
     WHERE id = 1
   `);
 
-  const filteredProviders = providers.filter((provider) => provider.type !== "mock");
+  const filteredProviders = providers.filter((provider) => !removedProviderTypes.includes(provider.type));
   const nextActiveProviderId = filteredProviders.some((provider) => provider.id === settingsRow.active_provider_id)
     ? settingsRow.active_provider_id
     : filteredProviders[0]?.id ?? null;
 
   const transaction = db.transaction(() => {
-    for (const alias of mockAliases) {
+    for (const alias of affectedAliases) {
       updateMockAliases.run(nowIso, alias.id);
       insertAuditLog.run(
         createId(),
         alias.id,
-        "alias.deleted",
-        `Legacy mock provider was removed from BurnAlias. Alias ${alias.email} was marked deleted locally.`,
+        eventType,
+        messageBuilder(alias.provider_name, alias.email),
         nowIso
       );
     }
@@ -87,10 +95,11 @@ function migrateLegacyMockProvider(db: Database.Database): void {
 
   log.info(
     {
-      migratedAliasCount: mockAliases.length,
-      removedMockProviders: hasMockProvider ? 1 : 0
+      migratedAliasCount: affectedAliases.length,
+      removedProviderCount: removedProviders.length,
+      removedProviderTypes
     },
-    "Migrated legacy mock provider state"
+    "Migrated removed provider state"
   );
 }
 
@@ -243,7 +252,20 @@ export function createDatabase(): Database.Database {
       new Date().toISOString()
     );
   } else {
-    migrateLegacyMockProvider(db);
+    migrateRemovedProviders(
+      db,
+      ["mock"],
+      "alias.deleted",
+      (_providerType, email) =>
+        `Legacy mock provider was removed from BurnAlias. Alias ${email} was marked deleted locally.`
+    );
+    migrateRemovedProviders(
+      db,
+      ["cloudflare"],
+      "provider.removed",
+      (_providerType, email) =>
+        `Cloudflare Email Routing was removed from BurnAlias. Alias ${email} remains only for historical reference.`
+    );
   }
 
   log.info("Database ready");

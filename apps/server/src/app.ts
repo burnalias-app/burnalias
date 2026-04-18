@@ -88,7 +88,7 @@ export function createApp() {
   app.use("/api", requireAuth(authService));
   app.use("/api", requireCsrfForStateChanges);
   app.use("/api/aliases", createAliasRouter(aliasService, scheduler));
-  app.use("/api", createMetaRouter(providerRegistry, settingsService, scheduler));
+  app.use("/api", createMetaRouter(providerRegistry, settingsService, scheduler, auditLogRepository));
 
   const webDistPath = path.resolve(__dirname, "..", "..", "web", "dist");
   app.use(express.static(webDistPath));

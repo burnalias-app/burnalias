@@ -1,11 +1,13 @@
 import { ProviderAlias } from "../domain/alias";
 import { logger } from "../lib/logger";
+import { extractLabelFromProviderNote } from "../lib/providerNotes";
 import {
   AliasPreviewResult,
   AliasProvider,
   ConnectionTestResult,
   CreateProviderAliasInput,
-  ForwardTarget
+  ForwardTarget,
+  UpdateProviderAliasMetadataInput
 } from "./provider";
 
 const BASE_URL = "https://api.simplelogin.io";
@@ -39,7 +41,11 @@ interface SlMailboxList {
 interface SlAlias {
   id: number;
   email: string;
+  note?: string | null;
   enabled: boolean;
+  mailboxes?: Array<{
+    email: string;
+  }>;
 }
 
 interface SlAliasDetails extends SlAlias {
@@ -172,12 +178,40 @@ export class SimpleLoginProvider implements AliasProvider {
       id: String(alias.id),
       email: alias.email,
       destinationEmail: selectedMailbox.email,
-      enabled: alias.enabled
+      enabled: alias.enabled,
+      label: extractLabelFromProviderNote(input.note ?? input.label ?? null)
     };
   }
 
   async disableAlias(providerAliasId: string): Promise<void> {
     await this.ensureAliasState(providerAliasId, false);
+  }
+
+  async updateAliasMetadata(providerAliasId: string, input: UpdateProviderAliasMetadataInput): Promise<void> {
+    let mailboxIds: number[] | undefined;
+
+    if (input.destinationEmail) {
+      const { mailboxes } = await this.listMailboxes();
+      const selectedMailbox = mailboxes.find(
+        (mailbox) => mailbox.email.toLowerCase() === input.destinationEmail?.toLowerCase()
+      );
+
+      if (!selectedMailbox) {
+        throw new Error(
+          `The forward-to address ${input.destinationEmail} is not configured as a mailbox in SimpleLogin.`
+        );
+      }
+
+      mailboxIds = [selectedMailbox.id];
+    }
+
+    await this.slFetch(`/api/aliases/${providerAliasId}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        note: input.note ?? null,
+        ...(mailboxIds ? { mailbox_ids: mailboxIds } : {})
+      })
+    });
   }
 
   async enableAlias(providerAliasId: string): Promise<void> {
@@ -193,8 +227,9 @@ export class SimpleLoginProvider implements AliasProvider {
     return data.aliases.map((alias) => ({
       id: String(alias.id),
       email: alias.email,
-      destinationEmail: "",
-      enabled: alias.enabled
+      destinationEmail: alias.mailboxes?.[0]?.email ?? "",
+      enabled: alias.enabled,
+      label: extractLabelFromProviderNote(alias.note ?? null)
     }));
   }
 

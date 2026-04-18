@@ -20,19 +20,18 @@ export const simpleLoginProviderConfigSchema = z.object({
 export const addyProviderConfigSchema = z.object({
   ...providerBaseSchema,
   type: z.literal("addy"),
-  config: z.object({})
-});
-
-export const cloudflareProviderConfigSchema = z.object({
-  ...providerBaseSchema,
-  type: z.literal("cloudflare"),
-  config: z.object({})
+  config: z.object({
+    apiKey: z.string().default(""),
+    hasStoredSecret: z.boolean().optional().default(false),
+    clearStoredSecret: z.boolean().optional().default(false),
+    lastConnectionTestSucceededAt: z.string().datetime().nullable().optional().default(null),
+    lastConnectionTestVerificationToken: z.string().min(1).nullable().optional().default(null)
+  })
 });
 
 export const configuredProviderSchema = z.discriminatedUnion("type", [
   simpleLoginProviderConfigSchema,
-  addyProviderConfigSchema,
-  cloudflareProviderConfigSchema
+  addyProviderConfigSchema
 ]);
 
 export type ConfiguredProvider = z.infer<typeof configuredProviderSchema>;

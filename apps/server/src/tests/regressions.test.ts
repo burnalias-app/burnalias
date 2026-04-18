@@ -392,6 +392,7 @@ test("alias lifecycle transitions update provider and local status correctly", a
     isImplemented: () => true,
     getProvider: () => ({
       name: "simplelogin",
+      updateAliasMetadata: async () => undefined,
       enableAlias: async () => {
         providerCalls.push("enable");
       },
@@ -445,6 +446,7 @@ test("terminal aliases cannot be reactivated or have expiration updated", async 
     isImplemented: () => true,
     getProvider: () => ({
       name: "simplelogin",
+      updateAliasMetadata: async () => undefined,
       enableAlias: async () => undefined,
       disableAlias: async () => undefined,
       deleteAlias: async () => undefined
@@ -467,7 +469,116 @@ test("terminal aliases cannot be reactivated or have expiration updated", async 
   );
 });
 
-test("provider sync reconciles active, inactive, and deleted aliases from provider state", async () => {
+test("updating expiration also refreshes the provider note with label and expiration", async () => {
+  const db = createTestDb();
+  const aliasRepository = new AliasRepository(db);
+  const auditLogRepository = new AuditLogRepository(db);
+  const settingsService = new SettingsService(
+    db,
+    "admin",
+    1000 * 60 * 60,
+    supportedProviders,
+    aliasRepository,
+    auditLogRepository
+  );
+
+  insertSettings(db, {
+    providers: [buildSimpleLoginProvider("provider-simplelogin")],
+    activeProviderId: "provider-simplelogin"
+  });
+
+  const metadataUpdates: Array<{ id: string; note: string | null | undefined }> = [];
+  const providerRegistry = {
+    isImplemented: () => true,
+    getProvider: () => ({
+      name: "simplelogin",
+      updateAliasMetadata: async (providerAliasId: string, input: { note?: string | null }) => {
+        metadataUpdates.push({ id: providerAliasId, note: input.note });
+      },
+      enableAlias: async () => undefined,
+      disableAlias: async () => undefined,
+      deleteAlias: async () => undefined
+    })
+  } as unknown as ConstructorParameters<typeof AliasService>[2];
+
+  const aliasService = new AliasService(aliasRepository, auditLogRepository, providerRegistry, settingsService);
+  const alias = buildAlias({ id: "alias-expiration", label: "Shopping" });
+  aliasRepository.create(alias);
+
+  const updated = await aliasService.updateExpiration(alias.id, 24);
+
+  assert.equal(updated.id, alias.id);
+  assert.equal(metadataUpdates.length, 1);
+  assert.equal(metadataUpdates[0]?.id, alias.providerAliasId);
+  assert.match(metadataUpdates[0]?.note ?? "", /^Label: Shopping \| BurnAlias expiration: /);
+});
+
+test("updating alias metadata refreshes the provider destination and note", async () => {
+  const db = createTestDb();
+  const aliasRepository = new AliasRepository(db);
+  const auditLogRepository = new AuditLogRepository(db);
+  const settingsService = new SettingsService(
+    db,
+    "admin",
+    1000 * 60 * 60,
+    supportedProviders,
+    aliasRepository,
+    auditLogRepository
+  );
+
+  insertSettings(db, {
+    providers: [buildSimpleLoginProvider("provider-simplelogin")],
+    activeProviderId: "provider-simplelogin"
+  });
+
+  const metadataUpdates: Array<{
+    id: string;
+    note: string | null | undefined;
+    destinationEmail?: string;
+  }> = [];
+  const providerRegistry = {
+    isImplemented: () => true,
+    getProvider: () => ({
+      name: "simplelogin",
+      updateAliasMetadata: async (
+        providerAliasId: string,
+        input: { note?: string | null; destinationEmail?: string }
+      ) => {
+        metadataUpdates.push({
+          id: providerAliasId,
+          note: input.note,
+          destinationEmail: input.destinationEmail
+        });
+      },
+      enableAlias: async () => undefined,
+      disableAlias: async () => undefined,
+      deleteAlias: async () => undefined
+    })
+  } as unknown as ConstructorParameters<typeof AliasService>[2];
+
+  const aliasService = new AliasService(aliasRepository, auditLogRepository, providerRegistry, settingsService);
+  const alias = buildAlias({ id: "alias-metadata", label: "Old label", destinationEmail: "old@example.com" });
+  aliasRepository.create(alias);
+
+  const updated = await aliasService.updateMetadata(alias.id, {
+    destinationEmail: "new@example.com",
+    label: "New label"
+  });
+
+  assert.equal(updated.destinationEmail, "new@example.com");
+  assert.equal(updated.label, "New label");
+  assert.deepEqual(metadataUpdates, [
+    {
+      id: alias.providerAliasId,
+      note: "Label: New label | BurnAlias expiration: 2026-04-15T10:30:00.000Z",
+      destinationEmail: "new@example.com"
+    }
+  ]);
+  assert.equal(aliasRepository.findById(alias.id)?.destinationEmail, "new@example.com");
+  assert.equal(aliasRepository.findById(alias.id)?.label, "New label");
+});
+
+test("provider sync keeps BurnAlias as the source of truth for label and forward target", async () => {
   const db = createTestDb();
   const aliasRepository = new AliasRepository(db);
   const auditLogRepository = new AuditLogRepository(db);
@@ -486,19 +597,69 @@ test("provider sync reconciles active, inactive, and deleted aliases from provid
     activeProviderId: "provider-simplelogin"
   });
 
-  const activeAlias = buildAlias({ id: "alias-active", providerAliasId: "remote-active", status: "inactive" });
-  const inactiveAlias = buildAlias({ id: "alias-inactive", providerAliasId: "remote-inactive", status: "active" });
+  const activeAlias = buildAlias({
+    id: "alias-active",
+    providerAliasId: "remote-active",
+    status: "inactive",
+    destinationEmail: "burn-active@example.com",
+    label: "Burn active"
+  });
+  const inactiveAlias = buildAlias({
+    id: "alias-inactive",
+    providerAliasId: "remote-inactive",
+    status: "active",
+    destinationEmail: "keep-local@example.com",
+    label: "Keep local"
+  });
+  const relabeledAlias = buildAlias({
+    id: "alias-relabeled",
+    providerAliasId: "remote-relabeled",
+    status: "active",
+    destinationEmail: "old-push@example.com",
+    label: "Push me"
+  });
   const missingAlias = buildAlias({ id: "alias-missing", providerAliasId: "remote-missing", status: "active" });
   aliasRepository.create(activeAlias);
   aliasRepository.create(inactiveAlias);
+  aliasRepository.create(relabeledAlias);
   aliasRepository.create(missingAlias);
 
+  const pushedMetadata: Array<{ id: string; note: string | null | undefined; destinationEmail?: string }> = [];
   const providerRegistry = {
     isImplemented: () => true,
     getProvider: () => ({
+      updateAliasMetadata: async (
+        providerAliasId: string,
+        input: { note?: string | null; destinationEmail?: string }
+      ) => {
+        pushedMetadata.push({
+          id: providerAliasId,
+          note: input.note,
+          destinationEmail: input.destinationEmail
+        });
+      },
       listAliases: async () => [
-        { id: "remote-active", email: activeAlias.email, destinationEmail: activeAlias.destinationEmail, enabled: true },
-        { id: "remote-inactive", email: inactiveAlias.email, destinationEmail: inactiveAlias.destinationEmail, enabled: false }
+        {
+          id: "remote-active",
+          email: activeAlias.email,
+          destinationEmail: "provider-active@example.com",
+          enabled: true,
+          label: "Provider active"
+        },
+        {
+          id: "remote-inactive",
+          email: inactiveAlias.email,
+          destinationEmail: "provider-changed@example.com",
+          enabled: false,
+          label: "Provider label"
+        },
+        {
+          id: "remote-relabeled",
+          email: relabeledAlias.email,
+          destinationEmail: "provider-empty@example.com",
+          enabled: true,
+          label: null
+        }
       ]
     })
   } as unknown as ConstructorParameters<typeof ExpirationScheduler>[3];
@@ -517,15 +678,46 @@ test("provider sync reconciles active, inactive, and deleted aliases from provid
   await scheduler.syncProvidersNow();
 
   assert.equal(aliasRepository.findById(activeAlias.id)?.status, "active");
+  assert.equal(aliasRepository.findById(activeAlias.id)?.destinationEmail, "burn-active@example.com");
+  assert.equal(aliasRepository.findById(activeAlias.id)?.label, "Burn active");
   assert.equal(aliasRepository.findById(inactiveAlias.id)?.status, "inactive");
+  assert.equal(aliasRepository.findById(inactiveAlias.id)?.destinationEmail, "keep-local@example.com");
+  assert.equal(aliasRepository.findById(inactiveAlias.id)?.label, "Keep local");
+  assert.equal(aliasRepository.findById(relabeledAlias.id)?.status, "active");
+  assert.equal(aliasRepository.findById(relabeledAlias.id)?.destinationEmail, "old-push@example.com");
+  assert.equal(aliasRepository.findById(relabeledAlias.id)?.label, "Push me");
   assert.equal(aliasRepository.findById(missingAlias.id)?.status, "deleted");
+  assert.deepEqual(pushedMetadata, [
+    {
+      id: "remote-active",
+      note: "Label: Burn active | BurnAlias expiration: 2026-04-15T10:30:00.000Z",
+      destinationEmail: "burn-active@example.com"
+    },
+    {
+      id: "remote-inactive",
+      note: "Label: Keep local | BurnAlias expiration: 2026-04-15T10:30:00.000Z",
+      destinationEmail: "keep-local@example.com"
+    },
+    {
+      id: "remote-relabeled",
+      note: "Label: Push me | BurnAlias expiration: 2026-04-15T10:30:00.000Z"
+      ,
+      destinationEmail: "old-push@example.com"
+    }
+  ]);
 
   const syncJob = scheduler.listJobs().find((job) => job.id === "provider-sync");
   assert.ok(syncJob);
-  assert.equal(syncJob.lastSummary, "Checked 1 provider, updated 2 aliases, and marked 1 deleted.");
+  assert.equal(syncJob.lastSummary, "Checked 1 provider, updated 3 aliases, and marked 1 deleted.");
 
   const missingAuditEvents = auditLogRepository.listForAlias(missingAlias.id).map((entry) => entry.eventType);
   assert.ok(missingAuditEvents.includes("alias.deleted"));
+  const activeAuditEvents = auditLogRepository.listForAlias(activeAlias.id).map((entry) => entry.eventType);
+  assert.ok(activeAuditEvents.includes("alias.label_pushed"));
+  assert.ok(activeAuditEvents.includes("alias.destination_pushed"));
+  const pushedLabelEvents = auditLogRepository.listForAlias(relabeledAlias.id).map((entry) => entry.eventType);
+  assert.ok(pushedLabelEvents.includes("alias.label_pushed"));
+  assert.ok(pushedLabelEvents.includes("alias.destination_pushed"));
 });
 
 test("provider sync communication failures leave alias state unchanged", async () => {

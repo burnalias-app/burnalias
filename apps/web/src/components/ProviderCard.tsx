@@ -15,8 +15,8 @@ type ProviderCardProps = {
   onSetActive: (providerId: string) => void;
   onSetActiveBlocked: (message: string) => void;
   onRename: (providerId: string, name: string) => void;
-  onApiKeyChange: (providerId: string, apiKey: string) => void;
-  onClearApiKey: (providerId: string) => void;
+  onSecretChange: (providerId: string, secret: string) => void;
+  onClearSecret: (providerId: string) => void;
   onConnectionTestSuccess: (providerId: string, testedAt: string, verificationToken: string) => void;
   onSave: (providerId: string) => Promise<void>;
 };
@@ -32,8 +32,8 @@ export function ProviderCard({
   onSetActive,
   onSetActiveBlocked,
   onRename,
-  onApiKeyChange,
-  onClearApiKey,
+  onSecretChange,
+  onClearSecret,
   onConnectionTestSuccess,
   onSave
 }: ProviderCardProps) {
@@ -46,8 +46,8 @@ export function ProviderCard({
     setTestStatus("testing");
     setTestResult(null);
     try {
-      const config = provider.type === "simplelogin" ? { apiKey: provider.config.apiKey } : {};
-      const result = await testProviderConnection(provider.type, config as Record<string, string>);
+      const config: Record<string, string> = { apiKey: provider.config.apiKey };
+      const result = await testProviderConnection(provider.type, config);
       setTestResult(result);
       setTestStatus(result.success ? "success" : "error");
       if (result.success && result.testedAt && result.verificationToken) {
@@ -96,21 +96,32 @@ export function ProviderCard({
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <label
+          <div
             className={[
-              "inline-flex items-center gap-2 rounded-full border border-white/10 bg-[#10161f] px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-white",
+              "flex items-center gap-3 rounded-[1.1rem] border border-white/10 bg-[#10161f] px-4 py-2.5 text-white",
               !canSetActive || saving ? "opacity-60" : ""
             ].join(" ")}
             title={setActiveDisabledReason ?? undefined}
           >
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-white/20 bg-[#141b24] text-[#d7a968] focus:ring-[#d7a968]/40"
-              checked={isActive}
-              onChange={(event) => handleSetActiveToggle(event.target.checked)}
-            />
-            Set active
-          </label>
+            <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-200">Set active</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={isActive}
+              onClick={() => handleSetActiveToggle(!isActive)}
+              className={[
+                "relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition",
+                isActive ? "bg-emerald-500/80" : "bg-slate-600/80"
+              ].join(" ")}
+            >
+              <span
+                className={[
+                  "inline-block h-5 w-5 rounded-full bg-white transition",
+                  isActive ? "translate-x-6" : "translate-x-1"
+                ].join(" ")}
+              />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -139,7 +150,7 @@ export function ProviderCard({
                 className={fieldClassName()}
                 type={showTypedApiKey ? "text" : "password"}
                 value={provider.config.apiKey}
-                onChange={(e) => onApiKeyChange(provider.id, e.target.value)}
+                onChange={(e) => onSecretChange(provider.id, e.target.value)}
                 placeholder={
                   provider.config.hasStoredSecret
                     ? "Stored securely. Enter a new key to replace it."
@@ -187,7 +198,7 @@ export function ProviderCard({
             <button
               type="button"
               className="rounded-[1.1rem] border border-white/10 bg-[#141b24]/88 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-[#1b2430] disabled:cursor-not-allowed disabled:opacity-60"
-              onClick={() => onClearApiKey(provider.id)}
+              onClick={() => onClearSecret(provider.id)}
               disabled={!provider.config.hasStoredSecret && !provider.config.apiKey || saving}
             >
               Clear key
@@ -205,51 +216,75 @@ export function ProviderCard({
             ) : null}
           </div>
         </div>
-      ) : provider.type === "addy" ? (
-        <div className="mt-4 grid gap-4">
-          <label className="grid gap-2">
-            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">API key</span>
-            <input
-              className={`${fieldClassName()} opacity-60`}
-              value=""
-              placeholder="Addy.io credentials will be enabled when this integration ships."
-              disabled
-              readOnly
-            />
-          </label>
-          <label className="grid gap-2">
-            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Alias domain</span>
-            <input
-              className={`${fieldClassName()} opacity-60`}
-              value=""
-              placeholder="Provider-specific settings will appear here."
-              disabled
-              readOnly
-            />
-          </label>
-        </div>
       ) : (
         <div className="mt-4 grid gap-4">
           <label className="grid gap-2">
-            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">API token</span>
-            <input
-              className={`${fieldClassName()} opacity-60`}
-              value=""
-              placeholder="Cloudflare routing credentials will be enabled when this integration ships."
-              disabled
-              readOnly
-            />
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">API key</span>
+            <div className="flex items-center gap-2">
+              <input
+                className={fieldClassName()}
+                type={showTypedApiKey ? "text" : "password"}
+                value={provider.config.apiKey}
+                onChange={(e) => onSecretChange(provider.id, e.target.value)}
+                placeholder={
+                  provider.config.hasStoredSecret
+                    ? "Stored securely. Enter a new key to replace it."
+                    : "Your Addy.io API key"
+                }
+                autoComplete="off"
+              />
+              <button
+                type="button"
+                className="shrink-0 rounded-[1.1rem] border border-white/10 bg-[#141b24]/88 px-4 py-3 text-sm text-slate-200 transition hover:bg-[#1b2430]"
+                onClick={() => setShowTypedApiKey((value) => !value)}
+                aria-label={showTypedApiKey ? "Hide API key" : "Show API key"}
+                title={showTypedApiKey ? "Hide typed API key" : "Show typed API key"}
+              >
+                {showTypedApiKey ? "Hide" : "Show"}
+              </button>
+            </div>
           </label>
-          <label className="grid gap-2">
-            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Zone</span>
-            <input
-              className={`${fieldClassName()} opacity-60`}
-              value=""
-              placeholder="Zone and routing settings will appear here."
-              disabled
-              readOnly
-            />
-          </label>
+
+          {provider.config.hasStoredSecret ? (
+            <div className="rounded-[1.1rem] border border-white/10 bg-[#10161f] px-4 py-3 text-sm leading-6 text-slate-300">
+              <p>An Addy.io API key is stored securely for this provider.</p>
+              <p className="mt-1 text-slate-400">
+                {provider.config.lastConnectionTestSucceededAt
+                  ? `Last successful connection test: ${formatDate(provider.config.lastConnectionTestSucceededAt)}`
+                  : "The stored key exists, but BurnAlias does not have a successful connection test recorded for it yet."}
+              </p>
+            </div>
+          ) : null}
+
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              className="rounded-[1.1rem] border border-white/10 bg-[#141b24]/88 px-4 py-2 text-sm font-medium text-white transition hover:bg-[#1b2430] disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => void handleTest()}
+              disabled={testStatus === "testing" || !provider.config.apiKey || saving}
+            >
+              {testStatus === "testing" ? "Testing..." : "Test connection"}
+            </button>
+            <button
+              type="button"
+              className="rounded-[1.1rem] border border-white/10 bg-[#141b24]/88 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-[#1b2430] disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => onClearSecret(provider.id)}
+              disabled={!provider.config.hasStoredSecret && !provider.config.apiKey || saving}
+            >
+              Clear key
+            </button>
+
+            {testResult ? (
+              <span
+                className={[
+                  "text-sm",
+                  testStatus === "success" ? "text-emerald-300" : "text-red-300"
+                ].join(" ")}
+              >
+                {testStatus === "success" ? "Success:" : "Error:"} {testResult.message}
+              </span>
+            ) : null}
+          </div>
         </div>
       )}
 

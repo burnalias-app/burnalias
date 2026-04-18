@@ -21,6 +21,8 @@ type DashboardViewProps = {
   aliases: Alias[];
   configuredProviderTypes: string[];
   filter: Filter;
+  allTabSearch: string;
+  allTabSort: "created-desc" | "created-asc" | "expires-asc" | "active-first";
   error: string | null;
   loading: boolean;
   syncSubmitting: boolean;
@@ -34,10 +36,18 @@ type DashboardViewProps = {
   submitting: boolean;
   onFormChange: Dispatch<SetStateAction<AliasFormState>>;
   onFilterChange: (filter: Filter) => void;
+  onAllTabSearchChange: (value: string) => void;
+  onAllTabSortChange: (value: "created-desc" | "created-asc" | "expires-asc" | "active-first") => void;
   onSubmit: (event: FormEvent) => Promise<void>;
-  onToggle: (alias: Alias) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
-  onUpdateExpiration: (id: string, expiresInHours: number | null) => Promise<void>;
+  onUpdateAlias: (payload: {
+    id: string;
+    destinationEmail: string;
+    label: string | null;
+    enabled: boolean;
+    expiresInHours: number | null;
+    clearExpiration: boolean;
+  }) => Promise<void>;
   onSync: () => Promise<void>;
 };
 
@@ -45,6 +55,8 @@ export function DashboardView({
   aliases,
   configuredProviderTypes,
   filter,
+  allTabSearch,
+  allTabSort,
   error,
   loading,
   syncSubmitting,
@@ -58,10 +70,11 @@ export function DashboardView({
   submitting,
   onFormChange,
   onFilterChange,
+  onAllTabSearchChange,
+  onAllTabSortChange,
   onSubmit,
-  onToggle,
   onDelete,
-  onUpdateExpiration,
+  onUpdateAlias,
   onSync
 }: DashboardViewProps) {
   const configuredProviderTypeSet = new Set(configuredProviderTypes);
@@ -184,11 +197,14 @@ export function DashboardView({
 
       {/* Alias list */}
       <section className={panelClassName("min-w-0 p-5 sm:p-6")}>
-        <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
           <div className="min-w-0">
-            <h2 className="font-serif text-2xl text-white sm:text-3xl">Alias dashboard</h2>
+            <h2 className="font-serif text-2xl text-white sm:text-3xl">Alias listing</h2>
             <p className="mt-2 text-sm leading-6 text-slate-300">Filter aliases by lifecycle state and manage them in place.</p>
           </div>
+        </div>
+
+        <div className="mb-5 grid gap-3 xl:grid-cols-[minmax(0,1fr)_15rem_24rem] xl:items-end">
           <div className="flex flex-wrap items-center gap-2">
               <RefreshButton
                 loading={syncSubmitting}
@@ -211,6 +227,28 @@ export function DashboardView({
                 </button>
               ))}
           </div>
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Sort</span>
+            <select
+              className={fieldClassName()}
+              value={allTabSort}
+              onChange={(e) => onAllTabSortChange(e.target.value as DashboardViewProps["allTabSort"])}
+            >
+              {filter === "all" ? <option value="active-first">Active first</option> : null}
+              <option value="created-desc">Newest created</option>
+              <option value="created-asc">Oldest created</option>
+              <option value="expires-asc">Expires soonest</option>
+            </select>
+          </label>
+          <label className="grid gap-2">
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Search</span>
+            <input
+              className={fieldClassName()}
+              value={allTabSearch}
+              onChange={(e) => onAllTabSearchChange(e.target.value)}
+              placeholder="Search aliases, labels, providers, or targets"
+            />
+          </label>
         </div>
 
         {error ? (
@@ -237,9 +275,9 @@ export function DashboardView({
                   (alias.status === "expired" || alias.status === "deleted") &&
                   !configuredProviderTypeSet.has(alias.providerName)
                 }
-                onToggle={onToggle}
                 onDelete={onDelete}
-                onUpdateExpiration={onUpdateExpiration}
+                forwardAddresses={forwardAddresses}
+                onUpdateAlias={onUpdateAlias}
               />
             ))}
           </div>

@@ -9,8 +9,11 @@ import {
   SessionState,
   SupportedProviderDefinition,
   ActiveProviderPreview,
+  AuditHistoryEntry,
   createAlias,
   deleteAlias,
+  fetchHistory,
+  updateAliasMetadata,
   updateAliasExpiration,
   fetchJobs,
   fetchActiveProviderPreview,
@@ -73,9 +76,12 @@ export default function App() {
   });
   const [session, setSession] = useState<SessionState | null>(null);
   const [jobs, setJobs] = useState<SchedulerJob[]>([]);
+  const [history, setHistory] = useState<AuditHistoryEntry[]>([]);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [authChecking, setAuthChecking] = useState(true);
   const [filter, setFilter] = useState<Filter>("active");
+  const [aliasSearch, setAliasSearch] = useState("");
+  const [aliasSort, setAliasSort] = useState<"created-desc" | "created-asc" | "expires-asc" | "active-first">("active-first");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [syncSubmitting, setSyncSubmitting] = useState(false);
@@ -140,6 +146,58 @@ export default function App() {
         : forwardAddresses.length === 0
           ? `No verified forward targets are available from ${forwardAddressState.providerName ?? activeProvider.name}.`
           : null;
+  const displayedAliases = (() => {
+    const normalizedSearch = aliasSearch.trim().toLowerCase();
+    const searched = normalizedSearch
+      ? aliases.filter((alias) => {
+          return [
+            alias.email,
+            alias.destinationEmail,
+            alias.label ?? "",
+            alias.providerName
+          ].some((value) => value.toLowerCase().includes(normalizedSearch));
+        })
+      : aliases;
+
+    const withTime = (value: string | null, fallback: number) => (value ? new Date(value).getTime() : fallback);
+    const sorted = [...searched];
+    const statusOrder: Record<Alias["status"], number> = {
+      active: 0,
+      inactive: 1,
+      expired: 2,
+      deleted: 3
+    };
+
+    sorted.sort((left, right) => {
+      switch (aliasSort) {
+        case "active-first": {
+          const statusDifference = statusOrder[left.status] - statusOrder[right.status];
+          if (statusDifference !== 0) {
+            return statusDifference;
+          }
+
+          return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+        }
+        case "created-asc":
+          return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+        case "expires-asc": {
+          const leftIsUpcoming = left.status === "active" || left.status === "inactive";
+          const rightIsUpcoming = right.status === "active" || right.status === "inactive";
+
+          if (leftIsUpcoming !== rightIsUpcoming) {
+            return leftIsUpcoming ? -1 : 1;
+          }
+
+          return withTime(left.expiresAt, Number.MAX_SAFE_INTEGER) - withTime(right.expiresAt, Number.MAX_SAFE_INTEGER);
+        }
+        case "created-desc":
+        default:
+          return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+      }
+    });
+
+    return sorted;
+  })();
 
   // --- Helpers ---
 
@@ -187,7 +245,9 @@ export default function App() {
     setJobsLoading(true);
     setJobsError(null);
     try {
-      setJobs(await fetchJobs());
+      const [nextJobs, nextHistory] = await Promise.all([fetchJobs(), fetchHistory()]);
+      setJobs(nextJobs);
+      setHistory(nextHistory);
     } catch (err) {
       setJobsError(err instanceof Error ? err.message : "Failed to load jobs.");
     } finally {
@@ -210,7 +270,9 @@ export default function App() {
           const nextSettings = await fetchSettings();
           syncSettings(nextSettings);
           await loadForwardTargets();
-          setJobs(await fetchJobs());
+          const [nextJobs, nextHistory] = await Promise.all([fetchJobs(), fetchHistory()]);
+          setJobs(nextJobs);
+          setHistory(nextHistory);
         }
       } catch (err) {
         setLoginError(err instanceof Error ? err.message : "Failed to initialize auth.");
@@ -291,6 +353,7 @@ export default function App() {
     setSettings(null);
     setAliases([]);
     setJobs([]);
+    setHistory([]);
     setForwardAddressState({ forwardAddresses: [], source: "none", providerName: null });
     setActiveProviderPreview({ suffix: null, providerHint: null });
     setError(null);
@@ -370,16 +433,6 @@ export default function App() {
     await persistSettings("History retention saved.", "history-retention");
   }
 
-  async function handleToggle(alias: Alias) {
-    try {
-      await setAliasEnabled(alias.id, alias.status !== "active");
-      await loadAliases(filter);
-      showToast(alias.status === "active" ? "Alias set inactive." : "Alias reactivated.");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update alias.");
-    }
-  }
-
   async function handleDelete(id: string) {
     try {
       await deleteAlias(id);
@@ -390,13 +443,56 @@ export default function App() {
     }
   }
 
-  async function handleUpdateExpiration(id: string, expiresInHours: number | null) {
+  async function handleUpdateAlias(payload: {
+    id: string;
+    destinationEmail: string;
+    label: string | null;
+    enabled: boolean;
+    expiresInHours: number | null;
+    clearExpiration: boolean;
+  }) {
     try {
-      await updateAliasExpiration(id, expiresInHours);
+      const currentAlias = aliases.find((alias) => alias.id === payload.id);
+      if (!currentAlias) {
+        throw new Error("Alias not found.");
+      }
+
+      let changed = false;
+      if (
+        currentAlias.destinationEmail !== payload.destinationEmail ||
+        (currentAlias.label ?? null) !== payload.label
+      ) {
+        await updateAliasMetadata(payload.id, {
+          destinationEmail: payload.destinationEmail,
+          label: payload.label
+        });
+        changed = true;
+      }
+
+      if ((currentAlias.status === "active") !== payload.enabled) {
+        await setAliasEnabled(payload.id, payload.enabled);
+        changed = true;
+      }
+
+      if (payload.clearExpiration) {
+        if (currentAlias.expiresAt !== null) {
+          await updateAliasExpiration(payload.id, null);
+          changed = true;
+        }
+      } else if (payload.expiresInHours != null) {
+        await updateAliasExpiration(payload.id, payload.expiresInHours);
+        changed = true;
+      }
+
+      if (!changed) {
+        showToast("No alias changes to save.", "info");
+        return;
+      }
+
       await loadAliases(filter);
-      showToast(expiresInHours != null ? "Expiration updated." : "Expiration cleared.");
+      showToast("Alias updated.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update expiration.");
+      setError(err instanceof Error ? err.message : "Failed to update alias.");
     }
   }
 
@@ -583,9 +679,11 @@ export default function App() {
           path="/dashboard"
           element={
             <DashboardView
-              aliases={aliases}
+              aliases={displayedAliases}
               configuredProviderTypes={configuredProviders.map((provider) => provider.type)}
               filter={filter}
+              allTabSearch={aliasSearch}
+              allTabSort={aliasSort}
               error={error}
               loading={loading}
               syncSubmitting={syncSubmitting}
@@ -598,11 +696,16 @@ export default function App() {
               createDisabledReason={createDisabledReason}
               submitting={submitting}
               onFormChange={setForm}
-              onFilterChange={setFilter}
+              onFilterChange={(nextFilter) => {
+                setFilter(nextFilter);
+                setAliasSearch("");
+                setAliasSort(nextFilter === "all" ? "active-first" : "created-desc");
+              }}
+              onAllTabSearchChange={setAliasSearch}
+              onAllTabSortChange={setAliasSort}
               onSubmit={handleSubmit}
-              onToggle={handleToggle}
               onDelete={handleDelete}
-              onUpdateExpiration={handleUpdateExpiration}
+              onUpdateAlias={handleUpdateAlias}
               onSync={handleSync}
             />
           }
@@ -622,28 +725,42 @@ export default function App() {
               onSetActive={(id) => setSettingsForm((cur) => ({ ...cur, activeProviderId: id }))}
               onSetActiveBlocked={(message) => showToast(message, "info")}
               onRenameProvider={(id, name) => updateProvider(id, (p) => ({ ...p, name }))}
-              onApiKeyChange={(id, apiKey) =>
+              onSecretChange={(id, secret) =>
                 updateProvider(id, (p) =>
                   p.type === "simplelogin"
                     ? {
                         ...p,
                         config: {
                           ...p.config,
-                          apiKey,
-                          hasStoredSecret: p.config.hasStoredSecret || Boolean(apiKey),
+                          apiKey: secret,
+                          hasStoredSecret: p.config.hasStoredSecret || Boolean(secret),
                           clearStoredSecret: false,
-                          lastConnectionTestSucceededAt: apiKey.trim()
+                          lastConnectionTestSucceededAt: secret.trim()
                             ? null
                             : p.config.lastConnectionTestSucceededAt ?? null,
-                          lastConnectionTestVerificationToken: apiKey.trim()
+                          lastConnectionTestVerificationToken: secret.trim()
                             ? null
                             : p.config.lastConnectionTestVerificationToken ?? null
                         }
                       }
-                    : p
+                    : {
+                        ...p,
+                        config: {
+                          ...p.config,
+                          apiKey: secret,
+                          hasStoredSecret: p.config.hasStoredSecret || Boolean(secret),
+                          clearStoredSecret: false,
+                          lastConnectionTestSucceededAt: secret.trim()
+                            ? null
+                            : p.config.lastConnectionTestSucceededAt ?? null,
+                          lastConnectionTestVerificationToken: secret.trim()
+                            ? null
+                            : p.config.lastConnectionTestVerificationToken ?? null
+                        }
+                      }
                 )
               }
-              onClearApiKey={(id) =>
+              onClearSecret={(id) =>
                 updateProvider(id, (p) =>
                   p.type === "simplelogin"
                     ? {
@@ -657,22 +774,30 @@ export default function App() {
                           lastConnectionTestVerificationToken: null
                         }
                       }
-                    : p
+                    : {
+                        ...p,
+                        config: {
+                          ...p.config,
+                          apiKey: "",
+                          hasStoredSecret: false,
+                          clearStoredSecret: true,
+                          lastConnectionTestSucceededAt: null,
+                          lastConnectionTestVerificationToken: null
+                        }
+                      }
                 )
               }
               onConnectionTestSuccess={(id, testedAt, verificationToken) =>
                 updateProvider(id, (p) =>
-                  p.type === "simplelogin"
-                    ? {
-                        ...p,
-                        config: {
-                          ...p.config,
-                          clearStoredSecret: false,
-                          lastConnectionTestSucceededAt: testedAt,
-                          lastConnectionTestVerificationToken: verificationToken
-                        }
-                      }
-                    : p
+                  ({
+                    ...p,
+                    config: {
+                      ...p.config,
+                      clearStoredSecret: false,
+                      lastConnectionTestSucceededAt: testedAt,
+                      lastConnectionTestVerificationToken: verificationToken
+                    }
+                  } as ConfiguredProvider)
                 )
               }
               onHistoryRetentionDaysChange={(value) => setSettingsForm((cur) => ({ ...cur, historyRetentionDays: value }))}
@@ -684,9 +809,10 @@ export default function App() {
         />
         <Route
           path="/jobs"
-          element={
+      element={
             <JobsView
               jobs={jobs}
+              history={history}
               loading={jobsLoading}
               error={jobsError}
               runningJobId={runningJobId}
