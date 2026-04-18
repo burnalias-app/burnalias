@@ -1,3 +1,6 @@
+
+***THIS APP IS A WORK IN PROGRESS AND CURRENTLY DOESN'T FUNCTION AS INTENDED***
+
 # BurnAlias
 
 BurnAlias is a self-hosted alias management app for external email forwarding providers. It does not run an email server. Providers remain the source of truth for email routing.
