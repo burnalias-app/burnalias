@@ -7,6 +7,7 @@ type TestStatus = "idle" | "testing" | "success" | "error";
 type ProviderCardProps = {
   provider: ConfiguredProvider;
   isActive: boolean;
+  aliasCount: number;
   meta: SupportedProviderDefinition | undefined;
   supportedProviders: SupportedProviderDefinition[];
   canSetActive: boolean;
@@ -17,13 +18,25 @@ type ProviderCardProps = {
   onRename: (providerId: string, name: string) => void;
   onSecretChange: (providerId: string, secret: string) => void;
   onClearSecret: (providerId: string) => void;
-  onConnectionTestSuccess: (providerId: string, testedAt: string, verificationToken: string) => void;
+  onConnectionTestSuccess: (
+    providerId: string,
+    testedAt: string,
+    verificationToken: string,
+    capabilities?: {
+      supportsCustomAliases?: boolean;
+      defaultAliasDomain?: string | null;
+      defaultAliasFormat?: string | null;
+      domainOptions?: string[];
+      maxRecipientCount?: number | null;
+    }
+  ) => void;
   onSave: (providerId: string) => Promise<void>;
 };
 
 export function ProviderCard({
   provider,
   isActive,
+  aliasCount,
   meta,
   supportedProviders,
   canSetActive,
@@ -51,7 +64,7 @@ export function ProviderCard({
       setTestResult(result);
       setTestStatus(result.success ? "success" : "error");
       if (result.success && result.testedAt && result.verificationToken) {
-        onConnectionTestSuccess(provider.id, result.testedAt, result.verificationToken);
+        onConnectionTestSuccess(provider.id, result.testedAt, result.verificationToken, result.capabilities);
       }
     } catch (err) {
       setTestResult({ success: false, message: err instanceof Error ? err.message : "Test failed." });
@@ -66,12 +79,12 @@ export function ProviderCard({
     }
 
     if (!nextChecked && isActive) {
-      onSetActiveBlocked("Select another ready provider before clearing the current active provider.");
+      onSetActiveBlocked("Select another ready provider before clearing the current default provider.");
       return;
     }
 
     if (!canSetActive) {
-      onSetActiveBlocked(setActiveDisabledReason ?? "This provider is not ready to be set active yet.");
+      onSetActiveBlocked(setActiveDisabledReason ?? "This provider is not ready to be set as the default yet.");
       return;
     }
 
@@ -86,6 +99,7 @@ export function ProviderCard({
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h4 className="font-serif text-lg text-white">{configuredProviderLabel(provider, supportedProviders)}</h4>
+            <span className="text-sm text-slate-400">{aliasCount} live aliases</span>
             {!implemented ? (
               <span className="rounded-full bg-slate-500/20 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-200">
                 Coming soon
@@ -103,7 +117,7 @@ export function ProviderCard({
             ].join(" ")}
             title={setActiveDisabledReason ?? undefined}
           >
-            <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-200">Set active</span>
+            <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-200">Set default</span>
             <button
               type="button"
               role="switch"
@@ -253,6 +267,13 @@ export function ProviderCard({
                   ? `Last successful connection test: ${formatDate(provider.config.lastConnectionTestSucceededAt)}`
                   : "The stored key exists, but BurnAlias does not have a successful connection test recorded for it yet."}
               </p>
+              {provider.config.lastConnectionTestSucceededAt ? (
+                <p className="mt-1 text-slate-400">
+                  {provider.config.supportsCustomAliases
+                    ? `Custom alias names are available${provider.config.defaultAliasDomain ? ` on ${provider.config.defaultAliasDomain}` : ""}.`
+                    : `This Addy.io account currently creates provider-generated aliases${provider.config.defaultAliasFormat ? ` using ${provider.config.defaultAliasFormat}` : ""}.`}
+                </p>
+              ) : null}
             </div>
           ) : null}
 

@@ -7,6 +7,7 @@ import {
   ConnectionTestResult,
   CreateProviderAliasInput,
   ForwardTarget,
+  ProviderPreviewInput,
   UpdateProviderAliasMetadataInput
 } from "./provider";
 
@@ -43,6 +44,8 @@ interface SlAlias {
   email: string;
   note?: string | null;
   enabled: boolean;
+  creation_date?: string | null;
+  created_at?: string | null;
   mailboxes?: Array<{
     email: string;
   }>;
@@ -57,6 +60,8 @@ interface SlAliasDetails extends SlAlias {
 interface SlAliasList {
   aliases: SlAlias[];
 }
+
+const ALIAS_PAGE_SIZE = 20;
 
 export class SimpleLoginProvider implements AliasProvider {
   readonly name = "simplelogin";
@@ -115,7 +120,7 @@ export class SimpleLoginProvider implements AliasProvider {
     }
   }
 
-  async getAliasPreview(): Promise<AliasPreviewResult | null> {
+  async getAliasPreview(_input?: ProviderPreviewInput): Promise<AliasPreviewResult | null> {
     const options = await this.slFetch<SlAliasOptions>("/api/v5/alias/options");
     const suffix = options.suffixes[0];
     if (!suffix) {
@@ -223,14 +228,32 @@ export class SimpleLoginProvider implements AliasProvider {
   }
 
   async listAliases(): Promise<ProviderAlias[]> {
-    const data = await this.slFetch<SlAliasList>("/api/v2/aliases?page_id=0");
-    return data.aliases.map((alias) => ({
-      id: String(alias.id),
-      email: alias.email,
-      destinationEmail: alias.mailboxes?.[0]?.email ?? "",
-      enabled: alias.enabled,
-      label: extractLabelFromProviderNote(alias.note ?? null)
-    }));
+    const aliases: ProviderAlias[] = [];
+    let pageId = 0;
+
+    while (true) {
+      const data = await this.slFetch<SlAliasList>(`/api/v2/aliases?page_id=${pageId}`);
+      const pageAliases = data.aliases ?? [];
+
+      aliases.push(
+        ...pageAliases.map((alias) => ({
+          id: String(alias.id),
+          email: alias.email,
+          destinationEmail: alias.mailboxes?.[0]?.email ?? "",
+          enabled: alias.enabled,
+          label: extractLabelFromProviderNote(alias.note ?? null),
+          createdAt: alias.creation_date ?? alias.created_at ?? null
+        }))
+      );
+
+      if (pageAliases.length < ALIAS_PAGE_SIZE) {
+        break;
+      }
+
+      pageId += 1;
+    }
+
+    return aliases;
   }
 
   private async ensureAliasState(providerAliasId: string, enabled: boolean): Promise<void> {

@@ -25,7 +25,12 @@ export const addyProviderConfigSchema = z.object({
     hasStoredSecret: z.boolean().optional().default(false),
     clearStoredSecret: z.boolean().optional().default(false),
     lastConnectionTestSucceededAt: z.string().datetime().nullable().optional().default(null),
-    lastConnectionTestVerificationToken: z.string().min(1).nullable().optional().default(null)
+    lastConnectionTestVerificationToken: z.string().min(1).nullable().optional().default(null),
+    supportsCustomAliases: z.boolean().nullable().optional().default(null),
+    defaultAliasDomain: z.string().min(1).nullable().optional().default(null),
+    defaultAliasFormat: z.string().min(1).nullable().optional().default(null),
+    domainOptions: z.array(z.string().min(1)).optional().default([]),
+    maxRecipientCount: z.number().int().positive().nullable().optional().default(null)
   })
 });
 

@@ -20,6 +20,20 @@ import { AuthService } from "./services/authService";
 import { ExpirationScheduler } from "./services/expirationScheduler";
 import { SettingsService } from "./services/settingsService";
 
+function serializeRequestSummary(req: express.Request & { id?: string }) {
+  return {
+    id: req.id,
+    method: req.method,
+    url: req.url
+  };
+}
+
+function serializeResponseSummary(res: express.Response) {
+  return {
+    statusCode: res.statusCode
+  };
+}
+
 export function createApp() {
   const db = createDatabase();
   const providerRegistry = new ProviderRegistry();
@@ -59,6 +73,10 @@ export function createApp() {
       autoLogging: {
         ignore: (req) => req.url === "/api/health"
       },
+      serializers: {
+        req: (req) => serializeRequestSummary(req as express.Request & { id?: string }),
+        res: (res) => serializeResponseSummary(res as express.Response)
+      },
       customSuccessMessage: (req, res) => `${req.method} ${req.url} -> ${res.statusCode}`,
       customErrorMessage: (req, res, err) =>
         `${req.method} ${req.url} -> ${res.statusCode}${err ? ` (${err.message})` : ""}`,
@@ -71,6 +89,38 @@ export function createApp() {
     })
   );
   app.use(express.json());
+  app.use((req, res, next) => {
+    if (!logger.isLevelEnabled("trace") || req.url === "/api/health") {
+      return next();
+    }
+
+    const startedAt = process.hrtime.bigint();
+    res.on("finish", () => {
+      const responseTime = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+      req.log.trace(
+        {
+          request: {
+            id: (req as express.Request & { id?: string }).id,
+            method: req.method,
+            url: req.url,
+            query: req.query,
+            params: req.params,
+            headers: req.headers,
+            remoteAddress: req.socket.remoteAddress,
+            remotePort: req.socket.remotePort
+          },
+          response: {
+            statusCode: res.statusCode,
+            headers: res.getHeaders()
+          },
+          responseTime: Math.round(responseTime)
+        },
+        "HTTP trace"
+      );
+    });
+
+    return next();
+  });
 
   const loginRateLimiter = rateLimit({
     windowMs: config.loginRateLimitWindowMs,

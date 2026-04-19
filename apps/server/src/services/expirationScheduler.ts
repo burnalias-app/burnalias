@@ -1,4 +1,5 @@
 import { Alias, ProviderAlias } from "../domain/alias";
+import { createId } from "../lib/id";
 import { logger } from "../lib/logger";
 import { buildProviderNote } from "../lib/providerNotes";
 import { ProviderRegistry } from "../providers/providerRegistry";
@@ -76,7 +77,7 @@ export class ExpirationScheduler {
         {
           id: "provider-sync",
           title: "Provider sync",
-          description: "Reconciles BurnAlias alias state against the active providers.",
+          description: "Reconciles BurnAlias alias state against configured providers and imports unknown aliases.",
           intervalMs: this.providerSyncIntervalMs,
           lastStartedAt: null,
           lastFinishedAt: null,
@@ -156,7 +157,7 @@ export class ExpirationScheduler {
         const summary =
           stats.providersChecked === 0
             ? "No providers needed reconciliation."
-            : `Checked ${stats.providersChecked} provider${stats.providersChecked === 1 ? "" : "s"}, updated ${stats.aliasesUpdated} aliases, and marked ${stats.aliasesMarkedDeleted} deleted.`;
+            : `Checked ${stats.providersChecked} provider${stats.providersChecked === 1 ? "" : "s"}, updated ${stats.aliasesUpdated} aliases, imported ${stats.aliasesImported}, and marked ${stats.aliasesMarkedDeleted} deleted.`;
         this.markJobFinished("provider-sync", "success", summary);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Provider sync failed.";
@@ -348,16 +349,9 @@ export class ExpirationScheduler {
     providersChecked: number;
     aliasesUpdated: number;
     aliasesMarkedDeleted: number;
+    aliasesImported: number;
   }> {
     const aliases = this.aliasRepository.listNonTerminal();
-    if (aliases.length === 0) {
-      return {
-        providersChecked: 0,
-        aliasesUpdated: 0,
-        aliasesMarkedDeleted: 0
-      };
-    }
-
     const aliasesByProvider = new Map<string, Alias[]>();
     for (const alias of aliases) {
       const group = aliasesByProvider.get(alias.providerName) ?? [];
@@ -365,11 +359,28 @@ export class ExpirationScheduler {
       aliasesByProvider.set(alias.providerName, group);
     }
 
+    const configuredProviders = this.settingsService.getInternalSettings().providerSettings.providers;
+    const providerNames = new Set<string>([
+      ...aliasesByProvider.keys(),
+      ...configuredProviders.map((provider) => provider.type)
+    ]);
+
+    if (providerNames.size === 0) {
+      return {
+        providersChecked: 0,
+        aliasesUpdated: 0,
+        aliasesMarkedDeleted: 0,
+        aliasesImported: 0
+      };
+    }
+
     let providersChecked = 0;
     let aliasesUpdated = 0;
     let aliasesMarkedDeleted = 0;
+    let aliasesImported = 0;
 
-    for (const [providerName, providerAliases] of aliasesByProvider.entries()) {
+    for (const providerName of providerNames) {
+      const providerAliases = aliasesByProvider.get(providerName) ?? [];
       if (!this.providerRegistry.isImplemented(providerName)) {
         log.warn({ providerName }, "Skipping provider reconciliation because provider is not available");
         continue;
@@ -377,26 +388,40 @@ export class ExpirationScheduler {
 
       try {
         const provider = this.providerRegistry.getProvider(providerName);
+        if (provider.getConfigurationCapabilities) {
+          try {
+            const capabilities = await provider.getConfigurationCapabilities();
+            if (capabilities) {
+              this.settingsService.updateProviderCapabilities(providerName as "addy" | "simplelogin", capabilities);
+            }
+          } catch (err) {
+            log.warn({ providerName, err }, "Provider capability refresh failed; keeping stored configuration metadata");
+          }
+        }
         const remoteAliases = await provider.listAliases();
-        const stats = await this.reconcileProviderState(providerAliases, remoteAliases);
+        const stats = await this.reconcileProviderState(providerName, providerAliases, remoteAliases);
         providersChecked += 1;
         aliasesUpdated += stats.aliasesUpdated;
         aliasesMarkedDeleted += stats.aliasesMarkedDeleted;
+        aliasesImported += stats.aliasesImported;
       } catch (err) {
         log.warn({ providerName, err }, "Provider reconciliation failed; local statuses left unchanged");
       }
     }
 
-    return { providersChecked, aliasesUpdated, aliasesMarkedDeleted };
+    return { providersChecked, aliasesUpdated, aliasesMarkedDeleted, aliasesImported };
   }
 
-  private async reconcileProviderState(localAliases: Alias[], remoteAliases: ProviderAlias[]): Promise<{
+  private async reconcileProviderState(providerName: string, localAliases: Alias[], remoteAliases: ProviderAlias[]): Promise<{
     aliasesUpdated: number;
     aliasesMarkedDeleted: number;
+    aliasesImported: number;
   }> {
     const remoteById = new Map(remoteAliases.map((alias) => [alias.id, alias]));
+    const localByRemoteId = new Map(localAliases.map((alias) => [alias.providerAliasId, alias]));
     let aliasesUpdated = 0;
     let aliasesMarkedDeleted = 0;
+    let aliasesImported = 0;
 
     for (const localAlias of localAliases) {
       const remoteAlias = remoteById.get(localAlias.providerAliasId);
@@ -474,6 +499,33 @@ export class ExpirationScheduler {
       }
     }
 
-    return { aliasesUpdated, aliasesMarkedDeleted };
+    for (const remoteAlias of remoteAliases) {
+      if (localByRemoteId.has(remoteAlias.id)) {
+        continue;
+      }
+
+      const importedAlias: Alias = {
+        id: createId(),
+        email: remoteAlias.email,
+        providerName,
+        providerAliasId: remoteAlias.id,
+        destinationEmail: remoteAlias.destinationEmail,
+        createdAt: remoteAlias.createdAt ?? new Date().toISOString(),
+        expiresAt: null,
+        status: remoteAlias.enabled ? "active" : "inactive",
+        label: remoteAlias.label
+      };
+
+      this.aliasRepository.create(importedAlias);
+      this.auditLogRepository.create({
+        aliasId: importedAlias.id,
+        eventType: "alias.imported",
+        message: `Alias ${importedAlias.email} was imported from the provider during sync.`
+      });
+      log.info({ aliasId: importedAlias.id, email: importedAlias.email, provider: importedAlias.providerName }, "Alias imported from provider");
+      aliasesImported += 1;
+    }
+
+    return { aliasesUpdated, aliasesMarkedDeleted, aliasesImported };
   }
 }

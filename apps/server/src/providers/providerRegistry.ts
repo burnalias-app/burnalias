@@ -68,15 +68,21 @@ export class ProviderRegistry {
     return null;
   }
 
-  async getAliasPreview(type: ProviderType): Promise<AliasPreviewResult | null> {
+  async getAliasPreview(
+    type: ProviderType,
+    options?: {
+      aliasFormat?: string | null;
+      domainName?: string | null;
+    }
+  ): Promise<AliasPreviewResult | null> {
     switch (type) {
       case "simplelogin": {
         const provider = this.providers.get("simplelogin") as SimpleLoginProvider | undefined;
-        return (await provider?.getAliasPreview()) ?? null;
+        return (await provider?.getAliasPreview(options)) ?? null;
       }
       case "addy": {
         const provider = this.providers.get("addy") as AddyProvider | undefined;
-        return (await provider?.getAliasPreview()) ?? null;
+        return (await provider?.getAliasPreview(options)) ?? null;
       }
       default:
         return null;

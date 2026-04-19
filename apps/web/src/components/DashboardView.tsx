@@ -8,6 +8,9 @@ import { RefreshButton } from "./common/RefreshButton";
 export type Filter = AliasStatus | "all";
 
 export type AliasFormState = {
+  providerType: "simplelogin" | "addy" | "";
+  aliasFormat: string;
+  domainName: string;
   localPart: string;
   destinationEmail: string;
   expiresAmount: string;
@@ -20,6 +23,7 @@ const filterOptions: Filter[] = ["all", "active", "inactive", "expired", "delete
 type DashboardViewProps = {
   aliases: Alias[];
   configuredProviderTypes: string[];
+  providerAliasCounts: Record<string, number>;
   filter: Filter;
   allTabSearch: string;
   allTabSort: "created-desc" | "created-asc" | "expires-asc" | "active-first";
@@ -27,8 +31,14 @@ type DashboardViewProps = {
   loading: boolean;
   syncSubmitting: boolean;
   form: AliasFormState;
-  activeProvider: ConfiguredProvider | null;
-  activeProviderMeta: SupportedProviderDefinition | null;
+  selectedProvider: ConfiguredProvider | null;
+  selectedProviderMeta: SupportedProviderDefinition | null;
+  providerPreview: {
+    usesTypedLocalPart?: boolean;
+    aliasFormatOptions?: Array<{ value: string; label: string }>;
+    domainOptions?: Array<{ value: string; label: string }>;
+    maxRecipientCount?: number | null;
+  };
   forwardAddresses: string[];
   forwardAddressSource: ForwardAddressSource;
   aliasPreview: string;
@@ -61,8 +71,10 @@ export function DashboardView({
   loading,
   syncSubmitting,
   form,
-  activeProvider,
-  activeProviderMeta,
+  selectedProvider,
+  selectedProviderMeta,
+  providerPreview,
+  providerAliasCounts,
   forwardAddresses,
   forwardAddressSource,
   aliasPreview,
@@ -78,39 +90,97 @@ export function DashboardView({
   onSync
 }: DashboardViewProps) {
   const configuredProviderTypeSet = new Set(configuredProviderTypes);
+  const usesTypedLocalPart = providerPreview.usesTypedLocalPart !== false;
+  const isAddy = selectedProvider?.type === "addy";
 
   return (
     <div className="grid min-w-0 gap-5">
       {/* Create alias */}
       <section className={panelClassName("p-5 sm:p-6")}>
-        <div className="mb-6 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="min-w-0">
             <h2 className="font-serif text-2xl text-white sm:text-3xl">Create alias</h2>
             <p className="mt-2 text-sm leading-6 text-slate-300">
               Generate a one-word alias name, choose where it forwards, and set how long it should stay active (minimum 1 hour).
             </p>
           </div>
-          <button
-            type="button"
-            className="w-full rounded-[1.1rem] border border-white/10 bg-[#141b24]/88 px-4 py-3 text-sm font-medium text-white transition hover:bg-[#1b2430] sm:w-auto"
-            onClick={() => onFormChange((cur) => ({ ...cur, localPart: randomAliasName() }))}
-          >
-            Regenerate name
-          </button>
+          <div className="grid gap-3 sm:grid-cols-[minmax(0,16rem)] sm:items-end">
+            <label className="grid gap-2">
+              <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Provider</span>
+              <select
+                className={fieldClassName()}
+                value={form.providerType}
+                onChange={(e) =>
+                  onFormChange((cur) => ({ ...cur, providerType: e.target.value as AliasFormState["providerType"] }))
+                }
+                required
+              >
+                {selectedProvider ? null : <option value="">Select a default provider in settings</option>}
+                {(["simplelogin", "addy"] as const)
+                  .filter((providerType) => configuredProviderTypeSet.has(providerType))
+                  .map((providerType) => (
+                    <option key={providerType} value={providerType}>
+                      {providerType === "simplelogin" ? "SimpleLogin" : "Addy.io"}
+                    </option>
+                ))}
+              </select>
+            </label>
+          </div>
         </div>
 
         <form className="grid gap-5" onSubmit={onSubmit}>
           <div className="grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <label className="grid gap-2">
-              <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Alias name</span>
-              <input
-                className={fieldClassName()}
-                value={form.localPart}
-                onChange={(e) => onFormChange((cur) => ({ ...cur, localPart: e.target.value }))}
-                placeholder="cedar"
-                required
-              />
-            </label>
+            {usesTypedLocalPart ? (
+              <label className="grid gap-2">
+                <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                  <span>Alias name</span>
+                  <RefreshButton
+                    loading={false}
+                    onClick={() => onFormChange((cur) => ({ ...cur, localPart: randomAliasName() }))}
+                    label="Regenerate alias name"
+                  />
+                </span>
+                <input
+                  className={fieldClassName()}
+                  value={form.localPart}
+                  onChange={(e) => onFormChange((cur) => ({ ...cur, localPart: e.target.value }))}
+                  placeholder="cedar"
+                  required
+                />
+              </label>
+            ) : null}
+            {isAddy && providerPreview.aliasFormatOptions && providerPreview.aliasFormatOptions.length > 0 ? (
+              <label className="grid gap-2">
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Alias format</span>
+                <select
+                  className={fieldClassName()}
+                  value={form.aliasFormat}
+                  onChange={(e) => onFormChange((cur) => ({ ...cur, aliasFormat: e.target.value }))}
+                >
+                  {providerPreview.aliasFormatOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            {isAddy && providerPreview.domainOptions && providerPreview.domainOptions.length > 0 ? (
+              <label className="grid gap-2">
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Domain</span>
+                <select
+                  className={fieldClassName()}
+                  value={form.domainName}
+                  onChange={(e) => onFormChange((cur) => ({ ...cur, domainName: e.target.value }))}
+                >
+                  {providerPreview.domainOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             <label className="grid gap-2">
               <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Forward to</span>
               <select
@@ -121,7 +191,7 @@ export function DashboardView({
                 disabled={forwardAddresses.length === 0}
               >
                 {forwardAddresses.length === 0 ? (
-                  <option value="">Add forward-to addresses in settings</option>
+                  <option value="">No verified forward targets available</option>
                 ) : null}
                 {forwardAddresses.map((address) => (
                   <option key={address} value={address}>{address}</option>
@@ -153,20 +223,30 @@ export function DashboardView({
             </div>
           </div>
 
+          {isAddy && providerPreview.maxRecipientCount === 1 ? (
+            <p className="text-xs leading-5 text-slate-400">
+              Addy.io free plans allow one recipient mailbox per alias.
+            </p>
+          ) : null}
+
           <div className="grid min-w-0 gap-4 xl:grid-cols-[1.2fr_0.8fr]">
             <section className={panelClassName("min-w-0 p-4 sm:p-5")}>
-              <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Generated alias</span>
+              <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Alias preview</span>
               <p className="mt-3 wrap-break-word font-mono text-base text-white sm:text-lg">{aliasPreview}</p>
               <p className="mt-3 text-sm leading-6 text-slate-400">
-                BurnAlias builds the full alias using the active provider domain, then starts the expiration countdown from the moment the alias is created.
+                {usesTypedLocalPart
+                  ? "BurnAlias builds the full alias using the selected provider domain, then starts the expiration countdown from the moment the alias is created."
+                  : "The provider will generate the local part for this alias when it is created. BurnAlias can only preview the format, not the exact generated value."}
               </p>
             </section>
             <section className={panelClassName("min-w-0 p-4 sm:p-5")}>
-              <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Active provider</span>
-              <p className="mt-3 text-lg text-white">{activeProvider?.name ?? "No active provider"}</p>
-              <p className="mt-2 text-sm leading-6 text-slate-300">
-                {activeProviderMeta?.description ?? "Choose the provider BurnAlias should use in settings."}
-              </p>
+              <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Provider</span>
+              <p className="mt-3 text-lg text-white">{selectedProvider?.name ?? "No default provider"}</p>
+              {selectedProvider ? (
+                <p className="mt-2 text-sm text-slate-400">
+                  {providerAliasCounts[selectedProvider.type] ?? 0} live aliases
+                </p>
+              ) : null}
             </section>
           </div>
 
@@ -182,7 +262,10 @@ export function DashboardView({
 
           <div className="flex flex-col gap-4 border-t border-white/10 pt-4 md:flex-row md:items-center md:justify-between">
             <p className="max-w-2xl text-sm leading-6 text-slate-400">
-              {createDisabledReason ?? "The alias name is generated for you, but you can override it before creation. Expiration is measured from the moment the alias is created."}
+              {createDisabledReason ??
+                (usesTypedLocalPart
+                  ? "The alias name is generated for you, but you can override it before creation. Expiration is measured from the moment the alias is created."
+                  : "The provider will generate the alias local part when it creates the alias. Expiration is measured from the moment the alias is created.")}
             </p>
             <button
               className="w-full rounded-[1.1rem] bg-linear-to-r from-[#c7924a] to-[#e0b777] px-5 py-3 font-semibold text-[#11161d] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"

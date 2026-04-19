@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import Database from "better-sqlite3";
+import { readOrCreatePersistentSecret } from "../lib/persistentSecret";
+import { AddyProvider } from "../providers/addyProvider";
+import { SimpleLoginProvider } from "../providers/simpleLoginProvider";
 import { SettingsService } from "../services/settingsService";
 import { supportedProviders } from "../providers/providerCatalog";
 import { AliasRepository } from "../repositories/aliasRepository";
@@ -110,6 +116,192 @@ function buildAlias(overrides: Partial<Alias> = {}): Alias {
     label: overrides.label ?? null
   };
 }
+
+test("persistent secrets key survives repeated loads without depending on auth password changes", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "burnalias-secret-"));
+  const secretPath = path.join(tempDir, ".burnalias-secrets-key");
+
+  const first = readOrCreatePersistentSecret(secretPath);
+  const second = readOrCreatePersistentSecret(secretPath);
+
+  assert.ok(first);
+  assert.equal(second, first);
+  assert.equal(fs.readFileSync(secretPath, "utf8").trim(), first);
+});
+
+test("SimpleLogin listAliases paginates through all pages", async () => {
+  const provider = new SimpleLoginProvider("test-key");
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    calls.push(url);
+
+    const pageId = Number(new URL(url).searchParams.get("page_id") ?? "0");
+    const aliases =
+      pageId === 0
+        ? Array.from({ length: 20 }, (_, index) => ({
+            id: index + 1,
+            email: `page0-${index}@example.com`,
+            note: null,
+            enabled: true,
+            mailboxes: [{ email: "target@example.com" }]
+          }))
+        : [
+            {
+              id: 21,
+              email: "page1-last@example.com",
+              note: "Label: from page 2",
+              enabled: false,
+              mailboxes: [{ email: "target@example.com" }]
+            }
+          ];
+
+    return new Response(JSON.stringify({ aliases }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }) as typeof fetch;
+
+  try {
+    const aliases = await provider.listAliases();
+    assert.equal(aliases.length, 21);
+    assert.deepEqual(
+      calls.map((url) => new URL(url).search),
+      ["?page_id=0", "?page_id=1"]
+    );
+    assert.equal(aliases.at(-1)?.email, "page1-last@example.com");
+    assert.equal(aliases.at(-1)?.enabled, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Addy preview reflects provider-generated aliases on free plans", async () => {
+  const provider = new AddyProvider("test-key");
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        data: [
+          {
+            username: "johndoe",
+            from_name: null,
+            default_alias_domain: "anonaddy.me",
+            default_alias_format: "uuid",
+            subscription: "free"
+          }
+        ]
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      }
+    )) as typeof fetch;
+
+  try {
+    const preview = await provider.getAliasPreview();
+    assert.equal(preview?.displaySuffix, "@anonaddy.me");
+    assert.equal(preview?.providerHint, "anonaddy.me");
+    assert.equal(preview?.usesTypedLocalPart, false);
+    assert.equal(preview?.generatedLocalPartLabel, "uuid");
+    assert.equal(preview?.selectedAliasFormat, "uuid");
+    assert.deepEqual(preview?.aliasFormatOptions, [
+      { value: "random_characters", label: "Random characters" },
+      { value: "uuid", label: "UUID" }
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Addy free-plan alias creation uses the provider-generated format instead of forcing custom local parts", async () => {
+  const provider = new AddyProvider("test-key");
+  const originalFetch = globalThis.fetch;
+  const capturedBodies: string[] = [];
+
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+    if (url.endsWith("/api/v1/recipients?filter[verified]=true&page[number]=1&page[size]=100")) {
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: "recipient-1",
+              email: "me@example.com",
+              email_verified_at: "2026-04-18T00:00:00.000Z"
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        }
+      );
+    }
+
+    if (url.endsWith("/api/v1/account-details")) {
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              username: "johndoe",
+              from_name: null,
+              default_alias_domain: "anonaddy.me",
+              default_alias_format: "uuid",
+              subscription: "free"
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        }
+      );
+    }
+
+    if (url.endsWith("/api/v1/aliases") && init?.method === "POST") {
+      capturedBodies.push(String(init.body ?? ""));
+      return new Response(
+        JSON.stringify({
+          data: {
+            id: "alias-1",
+            email: "generated@anonaddy.me",
+            active: true,
+            description: null
+          }
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        }
+      );
+    }
+
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const alias = await provider.createAlias({
+      localPart: "atlas",
+      destinationEmail: "me@example.com"
+    });
+
+    assert.equal(alias.email, "generated@anonaddy.me");
+    assert.equal(capturedBodies.length, 1);
+    assert.deepEqual(JSON.parse(capturedBodies[0] ?? "{}"), {
+      domain: "anonaddy.me",
+      format: "uuid",
+      description: null,
+      recipient_ids: ["recipient-1"]
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 test("replacing a provider key invalidates readiness until it is retested", () => {
   const db = createTestDb();
@@ -708,7 +900,7 @@ test("provider sync keeps BurnAlias as the source of truth for label and forward
 
   const syncJob = scheduler.listJobs().find((job) => job.id === "provider-sync");
   assert.ok(syncJob);
-  assert.equal(syncJob.lastSummary, "Checked 1 provider, updated 3 aliases, and marked 1 deleted.");
+  assert.equal(syncJob.lastSummary, "Checked 1 provider, updated 3 aliases, imported 0, and marked 1 deleted.");
 
   const missingAuditEvents = auditLogRepository.listForAlias(missingAlias.id).map((entry) => entry.eventType);
   assert.ok(missingAuditEvents.includes("alias.deleted"));
@@ -718,6 +910,72 @@ test("provider sync keeps BurnAlias as the source of truth for label and forward
   const pushedLabelEvents = auditLogRepository.listForAlias(relabeledAlias.id).map((entry) => entry.eventType);
   assert.ok(pushedLabelEvents.includes("alias.label_pushed"));
   assert.ok(pushedLabelEvents.includes("alias.destination_pushed"));
+});
+
+test("provider sync imports remote aliases that BurnAlias has never seen", async () => {
+  const db = createTestDb();
+  const aliasRepository = new AliasRepository(db);
+  const auditLogRepository = new AuditLogRepository(db);
+  const schedulerJobRepository = new SchedulerJobRepository(db);
+  const settingsService = new SettingsService(
+    db,
+    "admin",
+    1000 * 60 * 60,
+    supportedProviders,
+    aliasRepository,
+    auditLogRepository
+  );
+
+  insertSettings(db, {
+    providers: [buildSimpleLoginProvider("provider-simplelogin")],
+    activeProviderId: "provider-simplelogin"
+  });
+
+  const providerRegistry = {
+    isImplemented: () => true,
+    getProvider: () => ({
+      listAliases: async () => [
+        {
+          id: "remote-imported",
+          email: "imported@example.com",
+          destinationEmail: "target@example.com",
+          enabled: true,
+          label: "Imported label",
+          createdAt: "2026-04-18T12:00:00.000Z"
+        }
+      ]
+    })
+  } as unknown as ConstructorParameters<typeof ExpirationScheduler>[3];
+
+  const scheduler = new ExpirationScheduler(
+    aliasRepository,
+    auditLogRepository,
+    schedulerJobRepository,
+    providerRegistry,
+    settingsService,
+    60_000,
+    24 * 60 * 60 * 1000,
+    60 * 60 * 1000
+  );
+
+  await scheduler.syncProvidersNow();
+
+  const importedAlias = aliasRepository.list().find((alias) => alias.providerAliasId === "remote-imported");
+  assert.ok(importedAlias);
+  assert.equal(importedAlias?.providerName, "simplelogin");
+  assert.equal(importedAlias?.status, "active");
+  assert.equal(importedAlias?.destinationEmail, "target@example.com");
+  assert.equal(importedAlias?.label, "Imported label");
+  assert.equal(importedAlias?.createdAt, "2026-04-18T12:00:00.000Z");
+
+  const importedAuditEvents = importedAlias
+    ? auditLogRepository.listForAlias(importedAlias.id).map((entry) => entry.eventType)
+    : [];
+  assert.ok(importedAuditEvents.includes("alias.imported"));
+
+  const syncJob = scheduler.listJobs().find((job) => job.id === "provider-sync");
+  assert.ok(syncJob);
+  assert.equal(syncJob.lastSummary, "Checked 1 provider, updated 0 aliases, imported 1, and marked 0 deleted.");
 });
 
 test("provider sync communication failures leave alias state unchanged", async () => {

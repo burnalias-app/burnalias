@@ -3,8 +3,12 @@ import { config } from "../config";
 
 const ENCRYPTED_PREFIX = "enc:v1:";
 
+function getPrimarySecretsSource(): string {
+  return config.secretsKey ?? config.sessionSecret ?? "";
+}
+
 function getSecretsKey(): Buffer {
-  const source = config.secretsKey ?? config.sessionSecret ?? "";
+  const source = getPrimarySecretsSource();
   return createHash("sha256").update(source).digest();
 }
 
@@ -35,12 +39,12 @@ export function decryptSecret(value: string): string {
     throw new Error("Encrypted secret payload is malformed.");
   }
 
-  const decipher = createDecipheriv("aes-256-gcm", getSecretsKey(), Buffer.from(ivBase64, "base64"));
-  decipher.setAuthTag(Buffer.from(authTagBase64, "base64"));
-  const decrypted = Buffer.concat([
-    decipher.update(Buffer.from(encryptedBase64, "base64")),
-    decipher.final()
-  ]);
+  const iv = Buffer.from(ivBase64, "base64");
+  const authTag = Buffer.from(authTagBase64, "base64");
+  const encrypted = Buffer.from(encryptedBase64, "base64");
+  const decipher = createDecipheriv("aes-256-gcm", getSecretsKey(), iv);
+  decipher.setAuthTag(authTag);
+  const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
   return decrypted.toString("utf8");
 }
 

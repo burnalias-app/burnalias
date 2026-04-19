@@ -22,6 +22,63 @@ const runJobSchema = z.object({
   jobId: z.enum(["expiration-sweep", "terminal-history-purge", "provider-sync"])
 });
 
+const providerQuerySchema = z.object({
+  providerType: z.enum(["simplelogin", "addy"]).optional(),
+  aliasFormat: z.string().min(1).optional(),
+  domainName: z.string().min(1).optional()
+});
+
+function buildStoredAddyPreview(
+  provider: Extract<ReturnType<SettingsService["getProviderByType"]>, { type: "addy" }>,
+  options?: { aliasFormat?: string; domainName?: string }
+) {
+  const supportsCustomAliases = provider.config.supportsCustomAliases === true;
+  const domainOptions =
+    provider.config.domainOptions && provider.config.domainOptions.length > 0
+      ? provider.config.domainOptions
+      : provider.config.defaultAliasDomain
+        ? [provider.config.defaultAliasDomain]
+        : [];
+  const selectedDomain =
+    options?.domainName && domainOptions.includes(options.domainName)
+      ? options.domainName
+      : provider.config.defaultAliasDomain ?? domainOptions[0] ?? null;
+  const defaultFreePlanFormat =
+    provider.config.defaultAliasFormat && ["random_characters", "uuid"].includes(provider.config.defaultAliasFormat)
+      ? provider.config.defaultAliasFormat
+      : "random_characters";
+  const selectedAliasFormat = supportsCustomAliases
+    ? "custom"
+    : options?.aliasFormat && ["random_characters", "uuid"].includes(options.aliasFormat)
+      ? options.aliasFormat
+      : defaultFreePlanFormat;
+
+  if (!selectedDomain) {
+    return null;
+  }
+
+  return {
+    suffix: `@${selectedDomain}`,
+    providerHint: selectedDomain,
+    usesTypedLocalPart: supportsCustomAliases,
+    generatedLocalPartLabel: supportsCustomAliases
+      ? null
+      : selectedAliasFormat === "uuid"
+        ? "uuid"
+        : "random-characters",
+    aliasFormatOptions: supportsCustomAliases
+      ? []
+      : [
+          { value: "random_characters", label: "Random characters" },
+          { value: "uuid", label: "UUID" }
+        ],
+    selectedAliasFormat,
+    domainOptions: domainOptions.map((domain) => ({ value: domain, label: domain })),
+    selectedDomain,
+    maxRecipientCount: provider.config.maxRecipientCount ?? null
+  };
+}
+
 export function createMetaRouter(
   providerRegistry: ProviderRegistry,
   settingsService: SettingsService,
@@ -65,24 +122,56 @@ export function createMetaRouter(
     return res.json(result);
   });
 
-  router.get("/providers/active/suffix", async (_req, res) => {
-    const activeProvider = settingsService.getActiveProvider();
-    if (!activeProvider) {
-      return res.json({ suffix: null, providerHint: null });
+  router.get("/providers/active/suffix", async (req, res) => {
+    const parsedQuery = providerQuerySchema.safeParse(req.query);
+    const selectedProvider = parsedQuery.success && parsedQuery.data.providerType
+      ? settingsService.getProviderByType(parsedQuery.data.providerType)
+      : settingsService.getActiveProvider();
+    if (!selectedProvider) {
+      return res.json({ suffix: null, providerHint: null, usesTypedLocalPart: true, generatedLocalPartLabel: null });
+    }
+    if (selectedProvider.type === "addy") {
+      const storedPreview = buildStoredAddyPreview(selectedProvider, parsedQuery.success ? parsedQuery.data : undefined);
+      if (storedPreview) {
+        return res.json(storedPreview);
+      }
     }
     try {
-      const preview = await providerRegistry.getAliasPreview(activeProvider.type);
+      const preview = await providerRegistry.getAliasPreview(selectedProvider.type, {
+        aliasFormat: parsedQuery.success ? parsedQuery.data.aliasFormat ?? null : null,
+        domainName: parsedQuery.success ? parsedQuery.data.domainName ?? null : null
+      });
       return res.json({
         suffix: preview?.displaySuffix ?? null,
-        providerHint: preview?.providerHint ?? null
+        providerHint: preview?.providerHint ?? null,
+        usesTypedLocalPart: preview?.usesTypedLocalPart ?? true,
+        generatedLocalPartLabel: preview?.generatedLocalPartLabel ?? null,
+        aliasFormatOptions: preview?.aliasFormatOptions ?? [],
+        selectedAliasFormat: preview?.selectedAliasFormat ?? null,
+        domainOptions: preview?.domainOptions ?? [],
+        selectedDomain: preview?.selectedDomain ?? null,
+        maxRecipientCount: preview?.maxRecipientCount ?? null
       });
     } catch {
-      return res.json({ suffix: null, providerHint: null });
+      return res.json({
+        suffix: null,
+        providerHint: null,
+        usesTypedLocalPart: true,
+        generatedLocalPartLabel: null,
+        aliasFormatOptions: [],
+        selectedAliasFormat: null,
+        domainOptions: [],
+        selectedDomain: null,
+        maxRecipientCount: null
+      });
     }
   });
 
   router.get("/forward-addresses", (_req, res) => {
-    const activeProvider = settingsService.getActiveProvider();
+    const parsedQuery = providerQuerySchema.safeParse(_req.query);
+    const activeProvider = parsedQuery.success && parsedQuery.data.providerType
+      ? settingsService.getProviderByType(parsedQuery.data.providerType)
+      : settingsService.getActiveProvider();
 
     if (!activeProvider) {
       return res.json({

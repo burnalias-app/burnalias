@@ -41,6 +41,7 @@ export function AliasCard({
   const [editLabel, setEditLabel] = useState(alias.label ?? "");
   const [editEnabled, setEditEnabled] = useState(alias.status === "active");
   const [saving, setSaving] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   function openEditModal() {
     setEditDestinationEmail(alias.destinationEmail);
@@ -74,6 +75,15 @@ export function AliasCard({
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleDeleteClick() {
+    if (!confirmingDelete) {
+      setConfirmingDelete(true);
+      return;
+    }
+
+    await onDelete(alias.id);
   }
 
   return (
@@ -135,11 +145,25 @@ export function AliasCard({
             </button>
             <button
               type="button"
-              className="w-full rounded-[1.1rem] border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-200 transition hover:bg-red-500/15 sm:w-auto"
-              onClick={() => void onDelete(alias.id)}
+              className={[
+                "w-full rounded-[1.1rem] px-4 py-3 text-sm font-medium transition sm:w-auto",
+                confirmingDelete
+                  ? "border border-red-300/35 bg-red-500/20 text-red-100 hover:bg-red-500/25"
+                  : "border border-red-400/20 bg-red-500/10 text-red-200 hover:bg-red-500/15"
+              ].join(" ")}
+              onClick={() => void handleDeleteClick()}
             >
-              Delete
+              {confirmingDelete ? "Are you sure?" : "Delete"}
             </button>
+            {confirmingDelete ? (
+              <button
+                type="button"
+                className="w-full rounded-[1.1rem] border border-white/10 bg-[#141b24]/88 px-4 py-3 text-sm font-medium text-slate-300 transition hover:bg-[#1b2430] sm:w-auto"
+                onClick={() => setConfirmingDelete(false)}
+              >
+                Cancel
+              </button>
+            ) : null}
           </div>
         ) : providerRemovedFromApp ? (
           <div className="mt-5 rounded-[1rem] border border-amber-400/20 bg-amber-500/8 px-4 py-3 text-sm leading-6 text-amber-100/90">

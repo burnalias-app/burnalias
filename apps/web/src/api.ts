@@ -18,6 +18,9 @@ export interface CreateAliasPayload {
   expiresInHours: number | null;
   label: string | null;
   providerHint?: string | null;
+  providerType?: ProviderType;
+  aliasFormat?: string | null;
+  domainName?: string | null;
 }
 
 export type ProviderType = "simplelogin" | "addy";
@@ -52,6 +55,11 @@ export type ConfiguredProvider =
         clearStoredSecret?: boolean;
         lastConnectionTestSucceededAt?: string | null;
         lastConnectionTestVerificationToken?: string | null;
+        supportsCustomAliases?: boolean | null;
+        defaultAliasDomain?: string | null;
+        defaultAliasFormat?: string | null;
+        domainOptions?: string[];
+        maxRecipientCount?: number | null;
       };
     };
 
@@ -71,6 +79,7 @@ export interface AppSettings {
     supportedProviders: SupportedProviderDefinition[];
     providers: ConfiguredProvider[];
     activeProviderId: string | null;
+    providerAliasCounts: Record<string, number>;
   };
   lifecycleSettings: {
     historyRetentionDays: number;
@@ -162,8 +171,9 @@ export async function fetchProviders(): Promise<string[]> {
   return data.providers;
 }
 
-export async function fetchForwardAddresses(): Promise<ForwardAddressState> {
-  return request<ForwardAddressState>("/api/forward-addresses");
+export async function fetchForwardAddresses(providerType?: ProviderType): Promise<ForwardAddressState> {
+  const query = providerType ? `?providerType=${providerType}` : "";
+  return request<ForwardAddressState>(`/api/forward-addresses${query}`);
 }
 
 export async function createAlias(payload: CreateAliasPayload): Promise<Alias> {
@@ -263,6 +273,13 @@ export interface ConnectionTestResult {
   message: string;
   testedAt?: string;
   verificationToken?: string | null;
+  capabilities?: {
+    supportsCustomAliases?: boolean;
+    defaultAliasDomain?: string | null;
+    defaultAliasFormat?: string | null;
+    domainOptions?: string[];
+    maxRecipientCount?: number | null;
+  };
 }
 
 export async function testProviderConnection(
@@ -285,10 +302,28 @@ export async function fetchActiveProviderSuffix(): Promise<string | null> {
 export interface ActiveProviderPreview {
   suffix: string | null;
   providerHint: string | null;
+  usesTypedLocalPart?: boolean;
+  generatedLocalPartLabel?: string | null;
+  aliasFormatOptions?: Array<{ value: string; label: string }>;
+  selectedAliasFormat?: string | null;
+  domainOptions?: Array<{ value: string; label: string }>;
+  selectedDomain?: string | null;
+  maxRecipientCount?: number | null;
 }
 
-export async function fetchActiveProviderPreview(): Promise<ActiveProviderPreview> {
-  return request<ActiveProviderPreview>("/api/providers/active/suffix");
+export async function fetchActiveProviderPreview(
+  providerType?: ProviderType,
+  options?: {
+    aliasFormat?: string | null;
+    domainName?: string | null;
+  }
+): Promise<ActiveProviderPreview> {
+  const params = new URLSearchParams();
+  if (providerType) params.set("providerType", providerType);
+  if (options?.aliasFormat) params.set("aliasFormat", options.aliasFormat);
+  if (options?.domainName) params.set("domainName", options.domainName);
+  const query = params.toString() ? `?${params.toString()}` : "";
+  return request<ActiveProviderPreview>(`/api/providers/active/suffix${query}`);
 }
 
 export async function updateSettings(settings: AppSettings): Promise<AppSettings> {

@@ -18,18 +18,32 @@ export type SettingsFormState = {
 type SettingsViewProps = {
   settingsForm: SettingsFormState;
   supportedProviders: SupportedProviderDefinition[];
+  providerAliasCounts: Record<string, number>;
   settingsError: string | null;
   savingSection: "provider" | "history-retention" | null;
   forwardTargetsLoading: boolean;
-  activeForwardAddressSource: ForwardAddressSource;
-  activeForwardAddresses: string[];
-  activeForwardAddressProviderName: string | null;
+  providerForwardAddressStates: Partial<Record<ProviderType, {
+    forwardAddresses: string[];
+    source: ForwardAddressSource;
+    providerName: string | null;
+  }>>;
   onSetActive: (providerId: string) => void;
   onSetActiveBlocked: (message: string) => void;
   onRenameProvider: (providerId: string, name: string) => void;
   onSecretChange: (providerId: string, value: string) => void;
   onClearSecret: (providerId: string) => void;
-  onConnectionTestSuccess: (providerId: string, testedAt: string, verificationToken: string) => void;
+  onConnectionTestSuccess: (
+    providerId: string,
+    testedAt: string,
+    verificationToken: string,
+    capabilities?: {
+      supportsCustomAliases?: boolean;
+      defaultAliasDomain?: string | null;
+      defaultAliasFormat?: string | null;
+      domainOptions?: string[];
+      maxRecipientCount?: number | null;
+    }
+  ) => void;
   onHistoryRetentionDaysChange: (value: string) => void;
   onRefreshForwardTargets: () => Promise<void>;
   onSaveProvider: (providerId: string) => Promise<void>;
@@ -39,12 +53,11 @@ type SettingsViewProps = {
 export function SettingsView({
   settingsForm,
   supportedProviders,
+  providerAliasCounts,
   settingsError,
   savingSection,
   forwardTargetsLoading,
-  activeForwardAddressSource,
-  activeForwardAddresses,
-  activeForwardAddressProviderName,
+  providerForwardAddressStates,
   onSetActive,
   onSetActiveBlocked,
   onRenameProvider,
@@ -56,8 +69,6 @@ export function SettingsView({
   onSaveProvider,
   onSaveHistoryRetention
 }: SettingsViewProps) {
-  const activeProviderName =
-    settingsForm.providers.find((p) => p.id === settingsForm.activeProviderId)?.name ?? "None selected";
   const [selectedProviderType, setSelectedProviderType] = useState<ProviderType>(
     settingsForm.providers.find((provider) => provider.id === settingsForm.activeProviderId)?.type ?? "simplelogin"
   );
@@ -81,7 +92,7 @@ export function SettingsView({
       : !selectedProviderMeta?.implemented
         ? `${selectedProviderMeta?.label ?? selectedProvider.name} is not implemented yet.`
         : !isProviderReady(selectedProvider)
-          ? "Complete provider setup and run a successful connection test before setting it active."
+          ? "Complete provider setup and run a successful connection test before setting it as the default."
           : null;
 
   return (
@@ -89,7 +100,7 @@ export function SettingsView({
       <div className="mb-6">
         <h2 className="font-serif text-2xl text-white sm:text-3xl">Settings</h2>
         <p className="mt-2 text-sm leading-6 text-slate-300">
-          Configure providers, choose which one BurnAlias should use for new aliases, and review the verified forward targets available right now.
+          Configure providers, choose which one BurnAlias should use by default for new aliases, and review the verified forward targets available right now.
         </p>
       </div>
 
@@ -99,7 +110,7 @@ export function SettingsView({
           <section className={panelClassName("p-5")}>
             <h3 className="font-serif text-xl text-white">Providers</h3>
             <p className="mt-2 text-sm leading-6 text-slate-300">
-              Configure each supported provider here, then choose which ready provider BurnAlias should use for alias creation.
+              Configure each supported provider here, then choose which ready provider BurnAlias should use by default for alias creation.
             </p>
 
             <div className="mt-5 flex flex-wrap gap-2">
@@ -155,6 +166,7 @@ export function SettingsView({
                   isActive={settingsForm.activeProviderId === selectedProvider.id}
                   meta={selectedProviderMeta}
                   supportedProviders={supportedProviders}
+                  aliasCount={providerAliasCounts[selectedProvider.type] ?? 0}
                   canSetActive={!setActiveDisabledReason}
                   setActiveDisabledReason={setActiveDisabledReason}
                   saving={savingSection === "provider"}
@@ -177,7 +189,7 @@ export function SettingsView({
                 <div>
                   <h3 className="font-serif text-xl text-white">Verified forward targets</h3>
                   <p className="mt-2 text-sm leading-6 text-slate-300">
-                    BurnAlias reads these mailboxes from the active provider and uses them in the alias composer.
+                    BurnAlias reads these mailboxes from every configured provider and uses the selected provider targets in the alias composer.
                   </p>
                 </div>
                 <RefreshButton
@@ -189,61 +201,72 @@ export function SettingsView({
               </div>
 
               <div className="mt-5 grid gap-4">
-                <div className="rounded-[1.1rem] border border-white/10 bg-[#141b24]/85 px-4 py-4">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                        Provider
-                      </span>
-                      <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <p className="text-base text-white">
-                          {activeForwardAddressProviderName ?? activeProviderName}
-                        </p>
-                        {settingsForm.activeProviderId ? (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/20 bg-emerald-500/12 px-2.5 py-1 text-xs font-semibold text-emerald-200">
-                            <svg
-                              className="h-3.5 w-3.5"
-                              xmlns="http://www.w3.org/2000/svg"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              aria-hidden="true"
-                            >
-                              <path d="M20 6 9 17l-5-5" />
-                            </svg>
-                            Active
+                {settingsForm.providers.map((provider) => {
+                  const forwardState = providerForwardAddressStates[provider.type];
+                  const forwardAddresses = forwardState?.forwardAddresses ?? [];
+                  const hasProviderTargets = forwardState?.source === "provider";
+
+                  return (
+                    <div
+                      key={provider.id}
+                      className="rounded-[1.1rem] border border-white/10 bg-[#141b24]/85 px-4 py-4"
+                    >
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                            Provider
                           </span>
-                        ) : null}
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <p className="text-base text-white">
+                              {forwardState?.providerName ?? provider.name}
+                            </p>
+                            {settingsForm.activeProviderId === provider.id ? (
+                              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/20 bg-emerald-500/12 px-2.5 py-1 text-xs font-semibold text-emerald-200">
+                                <svg
+                                  className="h-3.5 w-3.5"
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  aria-hidden="true"
+                                >
+                                  <path d="M20 6 9 17l-5-5" />
+                                </svg>
+                                Default
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
                       </div>
+
+                      {!hasProviderTargets ? (
+                        <p className="mt-4 text-sm leading-6 text-slate-300">
+                          No verified forward targets are currently available from this provider.
+                        </p>
+                      ) : null}
+
+                      {forwardAddresses.length > 0 ? (
+                        <ul className="mt-4 grid gap-2">
+                          {forwardAddresses.map((address) => (
+                            <li
+                              key={`${provider.id}-${address}`}
+                              className="rounded-[0.95rem] border border-white/8 bg-[#111820]/80 px-3 py-2 text-sm text-slate-100 break-words"
+                            >
+                              {address}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="mt-4 text-sm text-slate-400">
+                          Refresh targets after adding or verifying new mailboxes with the provider.
+                        </p>
+                      )}
                     </div>
-                  </div>
-
-                  {activeForwardAddressSource !== "provider" ? (
-                    <p className="mt-4 text-sm leading-6 text-slate-300">
-                      No verified forward targets are currently available from the active provider.
-                    </p>
-                  ) : null}
-
-                  {activeForwardAddresses.length > 0 ? (
-                    <ul className="mt-4 grid gap-2">
-                      {activeForwardAddresses.map((address) => (
-                        <li
-                          key={address}
-                          className="rounded-[0.95rem] border border-white/8 bg-[#111820]/80 px-3 py-2 text-sm text-slate-100 break-words"
-                        >
-                          {address}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="mt-4 text-sm text-slate-400">
-                      Refresh targets after adding or verifying new mailboxes with the provider.
-                    </p>
-                  )}
-                </div>
+                  );
+                })}
               </div>
             </section>
 

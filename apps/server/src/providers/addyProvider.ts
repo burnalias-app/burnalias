@@ -7,10 +7,12 @@ import {
   ConnectionTestResult,
   CreateProviderAliasInput,
   ForwardTarget,
+  ProviderPreviewInput,
   UpdateProviderAliasMetadataInput
 } from "./provider";
 
 const BASE_URL = "https://app.addy.io";
+const CACHE_TTL_MS = 30_000;
 
 const log = logger.child({ module: "addyProvider" });
 
@@ -23,9 +25,18 @@ interface AddyEnvelope<T> {
 }
 
 interface AddyTokenDetails {
+  name?: string | null;
+  created_at?: string | null;
+  expires_at?: string | null;
+}
+
+interface AddyAccountDetails {
   username: string;
   from_name: string | null;
   default_alias_domain: string;
+  default_alias_format?: string | null;
+  subscription?: string | null;
+  recipient_limit?: number | null;
 }
 
 interface AddyRecipient {
@@ -35,16 +46,27 @@ interface AddyRecipient {
   email_verified_at?: string | null;
 }
 
+interface AddyDomainOptionEnvelope {
+  data: Array<string | { domain?: string | null }>;
+}
+
 interface AddyAlias {
   id: string;
   email: string;
   active: boolean;
   description: string | null;
+  created_at?: string | null;
   recipients?: AddyRecipient[];
 }
 
 export class AddyProvider implements AliasProvider {
   readonly name = "addy";
+  private accountDetailsCache: { value: AddyAccountDetails; expiresAt: number } | null = null;
+  private accountDetailsPromise: Promise<AddyAccountDetails> | null = null;
+  private recipientsCache: { value: AddyRecipient[]; expiresAt: number } | null = null;
+  private recipientsPromise: Promise<AddyRecipient[]> | null = null;
+  private domainOptionsCache = new Map<string, { value: string[]; expiresAt: number }>();
+  private domainOptionsPromise = new Map<string, Promise<string[]>>();
 
   constructor(private readonly apiKey: string) {}
 
@@ -79,10 +101,15 @@ export class AddyProvider implements AliasProvider {
 
   async testConnection(): Promise<ConnectionTestResult> {
     try {
-      const response = await this.addyFetch<AddyEnvelope<AddyTokenDetails>>("/api/v1/api-token-details");
+      const capabilities = await this.getConfigurationCapabilities();
+      const accountDetails = await this.getAccountDetails();
+      const supportsCustomAliases = this.supportsCustomAliases(accountDetails);
       return {
         success: true,
-        message: `Connected to Addy.io (${response.data.default_alias_domain})`
+        message: supportsCustomAliases
+          ? `Connected to Addy.io (${accountDetails.default_alias_domain}, custom aliases available)`
+          : `Connected to Addy.io (${accountDetails.default_alias_domain}, provider-generated aliases only)`,
+        capabilities
       };
     } catch (error) {
       return {
@@ -90,6 +117,18 @@ export class AddyProvider implements AliasProvider {
         message: error instanceof Error ? error.message : "Connection failed."
       };
     }
+  }
+
+  async getConfigurationCapabilities(): Promise<ConnectionTestResult["capabilities"] | undefined> {
+    const accountDetails = await this.getAccountDetails();
+    const domainOptions = await this.listDomainOptions(accountDetails.default_alias_domain);
+    return {
+      supportsCustomAliases: this.supportsCustomAliases(accountDetails),
+      defaultAliasDomain: accountDetails.default_alias_domain,
+      defaultAliasFormat: accountDetails.default_alias_format ?? null,
+      domainOptions,
+      maxRecipientCount: accountDetails.recipient_limit ?? null
+    };
   }
 
   async listForwardTargets(): Promise<ForwardTarget[]> {
@@ -100,11 +139,40 @@ export class AddyProvider implements AliasProvider {
     }));
   }
 
-  async getAliasPreview(): Promise<AliasPreviewResult | null> {
-    const tokenDetails = await this.getTokenDetails();
+  async getAliasPreview(input?: ProviderPreviewInput): Promise<AliasPreviewResult | null> {
+    const tokenDetails = await this.getAccountDetails();
+    const supportsCustomAliases = this.supportsCustomAliases(tokenDetails);
+    const domainOptions = await this.listDomainOptions(tokenDetails.default_alias_domain);
+    const selectedDomain =
+      input?.domainName && domainOptions.includes(input.domainName)
+        ? input.domainName
+        : tokenDetails.default_alias_domain;
+    const defaultFreePlanFormat =
+      tokenDetails.default_alias_format && ["random_characters", "uuid"].includes(tokenDetails.default_alias_format)
+        ? tokenDetails.default_alias_format
+        : "random_characters";
+    const selectedAliasFormat = supportsCustomAliases
+      ? "custom"
+      : input?.aliasFormat && ["random_characters", "uuid"].includes(input.aliasFormat)
+        ? input.aliasFormat
+        : defaultFreePlanFormat;
     return {
-      displaySuffix: `@${tokenDetails.default_alias_domain}`,
-      providerHint: tokenDetails.default_alias_domain
+      displaySuffix: `@${selectedDomain}`,
+      providerHint: selectedDomain,
+      usesTypedLocalPart: supportsCustomAliases,
+      generatedLocalPartLabel: supportsCustomAliases
+        ? null
+        : this.describeAliasFormat(selectedAliasFormat),
+      aliasFormatOptions: supportsCustomAliases
+        ? []
+        : [
+            { value: "random_characters", label: "Random characters" },
+            { value: "uuid", label: "UUID" }
+          ],
+      selectedAliasFormat,
+      domainOptions: domainOptions.map((domain) => ({ value: domain, label: domain })),
+      selectedDomain,
+      maxRecipientCount: tokenDetails.recipient_limit ?? null
     };
   }
 
@@ -124,12 +192,28 @@ export class AddyProvider implements AliasProvider {
       );
     }
 
-    const tokenDetails = await this.getTokenDetails();
+    const tokenDetails = await this.getAccountDetails();
+    const supportsCustomAliases = this.supportsCustomAliases(tokenDetails);
+    const defaultFreePlanFormat =
+      tokenDetails.default_alias_format && ["random_characters", "uuid"].includes(tokenDetails.default_alias_format)
+        ? tokenDetails.default_alias_format
+        : "random_characters";
+    const selectedFormat = supportsCustomAliases
+      ? "custom"
+      : input.aliasFormat && ["random_characters", "uuid"].includes(input.aliasFormat)
+        ? input.aliasFormat
+        : defaultFreePlanFormat;
+    const domainOptions = await this.listDomainOptions(tokenDetails.default_alias_domain);
+    const selectedDomain =
+      input.domainName && domainOptions.includes(input.domainName)
+        ? input.domainName
+        : tokenDetails.default_alias_domain;
     const response = await this.addyFetch<AddyEnvelope<AddyAlias>>("/api/v1/aliases", {
       method: "POST",
       body: JSON.stringify({
-        domain: tokenDetails.default_alias_domain,
-        local_part: input.localPart,
+        domain: selectedDomain,
+        format: selectedFormat,
+        ...(supportsCustomAliases ? { local_part: input.localPart } : {}),
         description: input.note ?? input.label ?? null,
         recipient_ids: [selectedRecipient.id]
       })
@@ -211,7 +295,8 @@ export class AddyProvider implements AliasProvider {
           email: alias.email,
           destinationEmail: alias.recipients?.[0]?.email ?? "",
           enabled: alias.active,
-          label: extractLabelFromProviderNote(alias.description ?? null)
+          label: extractLabelFromProviderNote(alias.description ?? null),
+          createdAt: alias.created_at ?? null
         }))
       );
 
@@ -226,14 +311,130 @@ export class AddyProvider implements AliasProvider {
   }
 
   private async getTokenDetails(): Promise<AddyTokenDetails> {
-    const response = await this.addyFetch<AddyEnvelope<AddyTokenDetails>>("/api/v1/api-token-details");
-    return response.data;
+    const response = await this.addyFetch<AddyEnvelope<AddyTokenDetails | AddyTokenDetails[]>>(
+      "/api/v1/api-token-details"
+    );
+    const details = Array.isArray(response.data) ? response.data[0] : response.data;
+    if (!details) {
+      throw new Error("Addy.io did not return API token details.");
+    }
+
+    return details;
+  }
+
+  private async getAccountDetails(): Promise<AddyAccountDetails> {
+    if (this.accountDetailsCache && this.accountDetailsCache.expiresAt > Date.now()) {
+      return this.accountDetailsCache.value;
+    }
+
+    if (this.accountDetailsPromise) {
+      return this.accountDetailsPromise;
+    }
+
+    this.accountDetailsPromise = (async () => {
+      const response = await this.addyFetch<AddyEnvelope<AddyAccountDetails | AddyAccountDetails[]>>(
+        "/api/v1/account-details"
+      );
+      const details = Array.isArray(response.data) ? response.data[0] : response.data;
+      if (!details?.default_alias_domain) {
+        throw new Error("Addy.io did not return account details.");
+      }
+
+      this.accountDetailsCache = {
+        value: details,
+        expiresAt: Date.now() + CACHE_TTL_MS
+      };
+      return details;
+    })();
+
+    try {
+      return await this.accountDetailsPromise;
+    } finally {
+      this.accountDetailsPromise = null;
+    }
   }
 
   private async listRecipients(): Promise<AddyRecipient[]> {
-    const response = await this.addyFetch<AddyEnvelope<AddyRecipient[]>>(
-      "/api/v1/recipients?filter[verified]=true&page[number]=1&page[size]=100"
-    );
-    return (response.data ?? []).filter((recipient) => Boolean(recipient.email_verified_at));
+    if (this.recipientsCache && this.recipientsCache.expiresAt > Date.now()) {
+      return this.recipientsCache.value;
+    }
+
+    if (this.recipientsPromise) {
+      return this.recipientsPromise;
+    }
+
+    this.recipientsPromise = (async () => {
+      const response = await this.addyFetch<AddyEnvelope<AddyRecipient[]>>(
+        "/api/v1/recipients?filter[verified]=true&page[number]=1&page[size]=100"
+      );
+      const recipients = (response.data ?? []).filter((recipient) => Boolean(recipient.email_verified_at));
+      this.recipientsCache = {
+        value: recipients,
+        expiresAt: Date.now() + CACHE_TTL_MS
+      };
+      return recipients;
+    })();
+
+    try {
+      return await this.recipientsPromise;
+    } finally {
+      this.recipientsPromise = null;
+    }
+  }
+
+  private async listDomainOptions(defaultDomain: string): Promise<string[]> {
+    const cachedValue = this.domainOptionsCache.get(defaultDomain);
+    if (cachedValue && cachedValue.expiresAt > Date.now()) {
+      return cachedValue.value;
+    }
+
+    const inflightValue = this.domainOptionsPromise.get(defaultDomain);
+    if (inflightValue) {
+      return inflightValue;
+    }
+
+    try {
+      const request = (async () => {
+        const response = await this.addyFetch<AddyDomainOptionEnvelope>("/api/v1/domain-options");
+        const options = (response.data ?? [])
+          .map((entry) => (typeof entry === "string" ? entry : entry.domain ?? null))
+          .filter((entry): entry is string => Boolean(entry));
+        const normalizedOptions = options.length > 0 ? options : [defaultDomain];
+        this.domainOptionsCache.set(defaultDomain, {
+          value: normalizedOptions,
+          expiresAt: Date.now() + CACHE_TTL_MS
+        });
+        return normalizedOptions;
+      })();
+
+      this.domainOptionsPromise.set(defaultDomain, request);
+      return await request;
+    } catch {
+      return [defaultDomain];
+    } finally {
+      this.domainOptionsPromise.delete(defaultDomain);
+    }
+  }
+
+  private supportsCustomAliases(details: AddyAccountDetails): boolean {
+    return (details.subscription ?? "free").toLowerCase() !== "free";
+  }
+
+  private describeAliasFormat(format: string | null | undefined): string {
+    switch (format) {
+      case "uuid":
+        return "uuid";
+      case "random_words":
+        return "random-words";
+      case "random_male_name":
+        return "random-male-name";
+      case "random_female_name":
+        return "random-female-name";
+      case "random_noun":
+        return "random-noun";
+      case "random_characters":
+      default:
+        return "random-characters";
+    }
   }
 }

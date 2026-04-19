@@ -18,4 +18,5 @@ export interface ProviderAlias {
   destinationEmail: string;
   enabled: boolean;
   label: string | null;
+  createdAt?: string | null;
 }

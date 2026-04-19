@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { z } from "zod";
 import { ConfiguredProvider, configuredProviderSchema } from "../providers/providerConfig";
-import { SupportedProviderDefinition } from "../providers/providerCatalog";
+import { ProviderType, SupportedProviderDefinition } from "../providers/providerCatalog";
 import { createSecretVerificationToken, decryptSecret, encryptSecret } from "../lib/secrets";
 import { AliasRepository } from "../repositories/aliasRepository";
 import { AuditLogRepository } from "../repositories/auditLogRepository";
@@ -39,7 +39,7 @@ export const updateSettingsSchema = z.object({
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["providerSettings", "activeProviderId"],
-        message: "Active provider must reference a configured provider."
+        message: "Default provider must reference a configured provider."
       });
       return;
     }
@@ -55,6 +55,7 @@ export interface AppSettings {
     supportedProviders: SupportedProviderDefinition[];
     providers: ConfiguredProvider[];
     activeProviderId: string | null;
+    providerAliasCounts: Record<string, number>;
   };
   lifecycleSettings: {
     historyRetentionDays: number;
@@ -110,7 +111,8 @@ export class SettingsService {
       providerSettings: {
         supportedProviders: this.supportedProviders,
         providers,
-        activeProviderId: row.active_provider_id
+        activeProviderId: row.active_provider_id,
+        providerAliasCounts: this.buildProviderAliasCounts()
       },
       lifecycleSettings: {
         historyRetentionDays: row.history_retention_days
@@ -134,6 +136,11 @@ export class SettingsService {
     );
   }
 
+  getProviderByType(type: ProviderType): ConfiguredProvider | null {
+    const settings = this.getInternalSettings();
+    return settings.providerSettings.providers.find((provider) => provider.type === type) ?? null;
+  }
+
   updateSettings(input: z.infer<typeof updateSettingsSchema>): AppSettings {
     const existingProviders = this.getInternalSettings().providerSettings.providers;
     const removedProviderCount =
@@ -152,7 +159,7 @@ export class SettingsService {
     }
 
     if (removedProviderCount > 0 && input.providerSettings.providers.length > 0 && !input.providerSettings.activeProviderId) {
-      throw new Error("Set another ready provider active before removing a provider.");
+      throw new Error("Set another ready default provider before removing a provider.");
     }
 
     const normalizedProviders = input.providerSettings.providers.map((provider) => {
@@ -173,11 +180,11 @@ export class SettingsService {
       );
 
       if (!activeProvider) {
-        throw new Error("Active provider must reference a configured provider.");
+        throw new Error("Default provider must reference a configured provider.");
       }
 
       if (!this.isProviderReady(activeProvider)) {
-        throw new Error(`The active provider "${activeProvider.name}" is not ready yet.`);
+        throw new Error(`The default provider "${activeProvider.name}" is not ready yet.`);
       }
     }
 
@@ -242,7 +249,12 @@ export class SettingsService {
             hasStoredSecret: Boolean(decryptedApiKey),
             clearStoredSecret: false,
             lastConnectionTestSucceededAt: provider.config.lastConnectionTestSucceededAt ?? null,
-            lastConnectionTestVerificationToken: provider.config.lastConnectionTestVerificationToken ?? null
+            lastConnectionTestVerificationToken: provider.config.lastConnectionTestVerificationToken ?? null,
+            supportsCustomAliases: provider.config.supportsCustomAliases ?? null,
+            defaultAliasDomain: provider.config.defaultAliasDomain ?? null,
+            defaultAliasFormat: provider.config.defaultAliasFormat ?? null,
+            domainOptions: provider.config.domainOptions ?? [],
+            maxRecipientCount: provider.config.maxRecipientCount ?? null
           }
         };
       }
@@ -261,6 +273,15 @@ export class SettingsService {
     }
 
     return false;
+  }
+
+  private buildProviderAliasCounts(): Record<string, number> {
+    return Object.fromEntries(
+      this.supportedProviders.map((provider) => [
+        provider.type,
+        this.aliasRepository.countNonTerminalByProviderName(provider.type)
+      ])
+    );
   }
 
   private maskProvider(provider: ConfiguredProvider): ConfiguredProvider {
@@ -285,7 +306,12 @@ export class SettingsService {
           hasStoredSecret: Boolean(provider.config.apiKey),
           clearStoredSecret: false,
           lastConnectionTestSucceededAt: provider.config.lastConnectionTestSucceededAt ?? null,
-          lastConnectionTestVerificationToken: null
+          lastConnectionTestVerificationToken: null,
+          supportsCustomAliases: provider.config.supportsCustomAliases ?? null,
+          defaultAliasDomain: provider.config.defaultAliasDomain ?? null,
+          defaultAliasFormat: provider.config.defaultAliasFormat ?? null,
+          domainOptions: provider.config.domainOptions ?? [],
+          maxRecipientCount: provider.config.maxRecipientCount ?? null
         }
       };
     }
@@ -365,6 +391,16 @@ export class SettingsService {
       existingProvider?.type === "addy"
         ? (existingProvider.config.lastConnectionTestVerificationToken ?? null)
         : null;
+    const existingSupportsCustomAliases =
+      existingProvider?.type === "addy" ? (existingProvider.config.supportsCustomAliases ?? null) : null;
+    const existingDefaultAliasDomain =
+      existingProvider?.type === "addy" ? (existingProvider.config.defaultAliasDomain ?? null) : null;
+    const existingDefaultAliasFormat =
+      existingProvider?.type === "addy" ? (existingProvider.config.defaultAliasFormat ?? null) : null;
+    const existingDomainOptions =
+      existingProvider?.type === "addy" ? (existingProvider.config.domainOptions ?? []) : [];
+    const existingMaxRecipientCount =
+      existingProvider?.type === "addy" ? (existingProvider.config.maxRecipientCount ?? null) : null;
     const providedVerificationToken = provider.config.lastConnectionTestVerificationToken ?? null;
     const hasVerifiedReplacementKey =
       hasNewTypedApiKey &&
@@ -391,9 +427,84 @@ export class SettingsService {
             ? providedVerificationToken
             : hasNewTypedApiKey
               ? null
-              : existingVerificationToken
+              : existingVerificationToken,
+        supportsCustomAliases: shouldClearSecret
+          ? null
+          : hasVerifiedReplacementKey
+            ? (provider.config.supportsCustomAliases ?? null)
+            : hasNewTypedApiKey
+              ? null
+              : existingSupportsCustomAliases,
+        defaultAliasDomain: shouldClearSecret
+          ? null
+          : hasVerifiedReplacementKey
+            ? (provider.config.defaultAliasDomain ?? null)
+            : hasNewTypedApiKey
+              ? null
+              : existingDefaultAliasDomain,
+        defaultAliasFormat: shouldClearSecret
+          ? null
+          : hasVerifiedReplacementKey
+            ? (provider.config.defaultAliasFormat ?? null)
+            : hasNewTypedApiKey
+              ? null
+              : existingDefaultAliasFormat,
+        domainOptions: shouldClearSecret
+          ? []
+          : hasVerifiedReplacementKey
+            ? (provider.config.domainOptions ?? [])
+            : hasNewTypedApiKey
+              ? []
+              : existingDomainOptions,
+        maxRecipientCount: shouldClearSecret
+          ? null
+          : hasVerifiedReplacementKey
+            ? (provider.config.maxRecipientCount ?? null)
+            : hasNewTypedApiKey
+              ? null
+              : existingMaxRecipientCount
       }
     };
+  }
+
+  updateProviderCapabilities(type: ProviderType, capabilities: {
+    supportsCustomAliases?: boolean;
+    defaultAliasDomain?: string | null;
+    defaultAliasFormat?: string | null;
+    domainOptions?: string[];
+    maxRecipientCount?: number | null;
+  }): void {
+    if (type !== "addy") {
+      return;
+    }
+
+    const settings = this.getInternalSettings();
+    const nextProviders = settings.providerSettings.providers.map((provider) => {
+      if (provider.type !== "addy") {
+        return provider;
+      }
+
+      return {
+        ...provider,
+        config: {
+          ...provider.config,
+          supportsCustomAliases: capabilities.supportsCustomAliases ?? provider.config.supportsCustomAliases ?? null,
+          defaultAliasDomain: capabilities.defaultAliasDomain ?? provider.config.defaultAliasDomain ?? null,
+          defaultAliasFormat: capabilities.defaultAliasFormat ?? provider.config.defaultAliasFormat ?? null,
+          domainOptions: capabilities.domainOptions ?? provider.config.domainOptions ?? [],
+          maxRecipientCount: capabilities.maxRecipientCount ?? provider.config.maxRecipientCount ?? null
+        }
+      };
+    });
+
+    this.db
+      .prepare(`
+        UPDATE app_settings
+        SET providers_json = ?,
+            updated_at = ?
+        WHERE id = 1
+      `)
+      .run(JSON.stringify(nextProviders), new Date().toISOString());
   }
 
   private hasVerifiedProviderSecret(provider: ConfiguredProvider, verificationMaterial: string): boolean {

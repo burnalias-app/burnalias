@@ -3,6 +3,7 @@ import { Alias, AliasStatus } from "../domain/alias";
 import { createId } from "../lib/id";
 import { logger } from "../lib/logger";
 import { buildProviderNote } from "../lib/providerNotes";
+import { ProviderType } from "../providers/providerCatalog";
 import { ProviderRegistry } from "../providers/providerRegistry";
 import { AliasRepository } from "../repositories/aliasRepository";
 import { AuditLogRepository } from "../repositories/auditLogRepository";
@@ -19,7 +20,10 @@ export const createAliasSchema = z.object({
   destinationEmail: z.string().email(),
   expiresInHours: z.coerce.number().int().min(1).max(87600).nullable().optional(),
   label: z.string().max(64).nullable().optional(),
-  providerHint: z.string().min(1).nullable().optional()
+  providerHint: z.string().min(1).nullable().optional(),
+  providerType: z.enum(["simplelogin", "addy"]).optional(),
+  aliasFormat: z.string().min(1).nullable().optional(),
+  domainName: z.string().min(1).nullable().optional()
 });
 
 export const updateAliasMetadataSchema = z.object({
@@ -40,18 +44,21 @@ export class AliasService {
   }
 
   async createAlias(input: z.infer<typeof createAliasSchema>): Promise<Alias> {
-    const activeProvider = this.settingsService.getActiveProvider();
-    if (!activeProvider) {
-      log.warn("Alias creation failed: no active provider configured");
-      throw new Error("No active provider is configured.");
+    const providerType = input.providerType ?? undefined;
+    const selectedProvider = providerType
+      ? this.settingsService.getProviderByType(providerType)
+      : this.settingsService.getActiveProvider();
+    if (!selectedProvider) {
+      log.warn({ providerType }, "Alias creation failed: no default provider configured");
+      throw new Error("No default provider is configured.");
     }
 
-    if (!this.providerRegistry.isImplemented(activeProvider.type)) {
-      log.warn({ providerType: activeProvider.type, providerName: activeProvider.name }, "Alias creation failed: provider not implemented");
-      throw new Error(`The active provider "${activeProvider.name}" is not available yet.`);
+    if (!this.providerRegistry.isImplemented(selectedProvider.type)) {
+      log.warn({ providerType: selectedProvider.type, providerName: selectedProvider.name }, "Alias creation failed: provider not implemented");
+      throw new Error(`The selected provider "${selectedProvider.name}" is not available yet.`);
     }
 
-    const provider = this.providerRegistry.getProvider(activeProvider.type);
+    const provider = this.providerRegistry.getProvider(selectedProvider.type);
     log.debug({ localPart: input.localPart, destination: input.destinationEmail, provider: provider.name }, "Creating alias via provider");
 
     const createdAt = new Date();
@@ -65,7 +72,9 @@ export class AliasService {
       localPart: input.localPart,
       destinationEmail: input.destinationEmail,
       note: providerNote,
-      providerHint: input.providerHint ?? null
+      providerHint: input.providerHint ?? undefined,
+      aliasFormat: input.aliasFormat ?? null,
+      domainName: input.domainName ?? undefined
     });
 
     const alias: Alias = {

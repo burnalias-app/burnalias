@@ -45,12 +45,22 @@ type ToastState = {
 } | null;
 
 const emptyForm: AliasFormState = {
+  providerType: "",
+  aliasFormat: "",
+  domainName: "",
   localPart: "",
   destinationEmail: "",
   expiresAmount: "30",
   expiresUnit: "d",
   label: ""
 };
+
+function getProviderPreviewCacheKey(
+  providerType: ProviderType,
+  options?: { aliasFormat?: string | null; domainName?: string | null }
+): string {
+  return `${providerType}|${options?.aliasFormat ?? ""}|${options?.domainName ?? ""}`;
+}
 
 function ensureAllSupportedProviders(
   providers: ConfiguredProvider[],
@@ -97,13 +107,20 @@ export default function App() {
   const [toast, setToast] = useState<ToastState>(null);
   const [activeProviderPreview, setActiveProviderPreview] = useState<ActiveProviderPreview>({
     suffix: null,
-    providerHint: null
+    providerHint: null,
+    usesTypedLocalPart: true,
+    generatedLocalPartLabel: null
   });
   const [forwardAddressState, setForwardAddressState] = useState<ForwardAddressState>({
     forwardAddresses: [],
     source: "none",
     providerName: null
   });
+  const [forwardAddressCache, setForwardAddressCache] = useState<Partial<Record<ProviderType, ForwardAddressState>>>({});
+  const [settingsForwardAddressStates, setSettingsForwardAddressStates] = useState<
+    Partial<Record<ProviderType, ForwardAddressState>>
+  >({});
+  const [providerPreviewCache, setProviderPreviewCache] = useState<Record<string, ActiveProviderPreview>>({});
   const [form, setForm] = useState<AliasFormState>({ ...emptyForm, localPart: randomAliasName() });
 
   // Derived state
@@ -115,10 +132,13 @@ export default function App() {
         : "dashboard";
   const supportedProviders: SupportedProviderDefinition[] = settings?.providerSettings.supportedProviders ?? [];
   const configuredProviders: ConfiguredProvider[] = settings?.providerSettings.providers ?? [];
+  const providerAliasCounts = settings?.providerSettings.providerAliasCounts ?? {};
   const forwardAddresses: string[] = forwardAddressState.forwardAddresses;
-  const activeProvider =
+  const defaultProvider =
     configuredProviders.find((p) => p.id === settings?.providerSettings.activeProviderId) ?? null;
-  const activeProviderMeta = supportedProviders.find((p) => p.type === activeProvider?.type) ?? null;
+  const selectedProvider =
+    configuredProviders.find((provider) => provider.type === form.providerType) ?? defaultProvider;
+  const selectedProviderMeta = supportedProviders.find((p) => p.type === selectedProvider?.type) ?? null;
   const providerSyncJob = jobs.find((job) => job.id === "provider-sync") ?? null;
   const lastProviderSyncLabel = providerSyncJob?.lastFinishedAt
     ? new Date(providerSyncJob.lastFinishedAt).toLocaleString([], {
@@ -130,21 +150,33 @@ export default function App() {
     : "Not run yet";
   const aliasPreview = (() => {
     const prefix = form.localPart || "alias";
-    if (!activeProvider) return `${prefix}@configured-domain`;
-    if (activeProviderPreview.suffix) return `${prefix}${activeProviderPreview.suffix}`;
+    if (!selectedProvider) return `${prefix}@configured-domain`;
+    if (activeProviderPreview.suffix) {
+      const previewPrefix =
+        activeProviderPreview.usesTypedLocalPart === false
+          ? `<${activeProviderPreview.generatedLocalPartLabel ?? "provider-generated"}>`
+          : prefix;
+      return `${previewPrefix}${activeProviderPreview.suffix}`;
+    }
     const fallbackDomain: Partial<Record<string, string>> = {
       simplelogin: "simplelogin.com",
-      addy: "addy.io"
+      addy: "anonaddy.me"
     };
-    return `${prefix}@${fallbackDomain[activeProvider.type] ?? "configured-domain"}`;
+    return `${
+      selectedProvider.type === "addy" && activeProviderPreview.usesTypedLocalPart === false
+        ? `<${activeProviderPreview.generatedLocalPartLabel ?? "provider-generated"}>`
+        : prefix
+    }@${fallbackDomain[selectedProvider.type] ?? "configured-domain"}`;
   })();
   const createDisabledReason =
-    !activeProvider
-      ? "Select an active provider in settings before creating aliases."
-      : !activeProviderMeta?.implemented
-        ? `${activeProviderMeta?.label ?? activeProvider.name} is not implemented yet.`
+    !defaultProvider
+      ? "Set a default provider in settings before creating aliases."
+      : !selectedProvider
+        ? "Select a provider before creating aliases."
+        : !selectedProviderMeta?.implemented
+          ? `${selectedProviderMeta?.label ?? selectedProvider.name} is not implemented yet.`
         : forwardAddresses.length === 0
-          ? `No verified forward targets are available from ${forwardAddressState.providerName ?? activeProvider.name}.`
+          ? `No verified forward targets are available from ${forwardAddressState.providerName ?? selectedProvider.name}.`
           : null;
   const displayedAliases = (() => {
     const normalizedSearch = aliasSearch.trim().toLowerCase();
@@ -206,24 +238,127 @@ export default function App() {
       nextSettings.providerSettings.providers,
       nextSettings.providerSettings.supportedProviders
     );
+    const defaultProviderType =
+      normalizedProviders.find((provider) => provider.id === nextSettings.providerSettings.activeProviderId)?.type ?? "";
     setSettings(nextSettings);
     setSettingsForm({
       providers: normalizedProviders,
       activeProviderId: nextSettings.providerSettings.activeProviderId,
       historyRetentionDays: String(nextSettings.lifecycleSettings.historyRetentionDays)
     });
+    setForm((cur) => ({
+      ...cur,
+      providerType:
+        normalizedProviders.some((provider) => provider.type === cur.providerType)
+          ? cur.providerType
+          : defaultProviderType
+    }));
   }
 
-  async function loadForwardTargets() {
-    setForwardTargetsLoading(true);
-    try {
-      setForwardAddressState(await fetchForwardAddresses());
-    } catch {
+  async function loadForwardTargets(providerType?: ProviderType) {
+    if (!providerType) {
+      setForwardAddressState({ forwardAddresses: [], source: "none", providerName: null });
+      return;
+    }
+
+    const cachedState = forwardAddressCache[providerType];
+    if (cachedState) {
+      setForwardAddressState(cachedState);
+    } else {
       setForwardAddressState({
         forwardAddresses: [],
         source: "none",
-        providerName: activeProvider?.name ?? null
+        providerName:
+          configuredProviders.find((provider) => provider.type === providerType)?.name ??
+          defaultProvider?.name ??
+          null
       });
+    }
+
+    setForwardTargetsLoading(true);
+    try {
+      const nextState = await fetchForwardAddresses(providerType);
+      setForwardAddressCache((cur) => ({ ...cur, [providerType]: nextState }));
+      setForwardAddressState(nextState);
+    } catch {
+      if (!cachedState) {
+        setForwardAddressState({
+          forwardAddresses: [],
+          source: "none",
+          providerName:
+            configuredProviders.find((provider) => provider.type === providerType)?.name ??
+            defaultProvider?.name ??
+            null
+        });
+      }
+    } finally {
+      setForwardTargetsLoading(false);
+    }
+  }
+
+  async function loadProviderPreview(
+    providerType: ProviderType,
+    options?: {
+      aliasFormat?: string | null;
+      domainName?: string | null;
+    }
+  ) {
+    const cacheKey = getProviderPreviewCacheKey(providerType, options);
+    const cachedPreview = providerPreviewCache[cacheKey];
+
+    if (cachedPreview) {
+      setActiveProviderPreview(cachedPreview);
+    } else {
+      setActiveProviderPreview({
+        suffix: null,
+        providerHint: null,
+        usesTypedLocalPart: providerType === "addy" ? undefined : true,
+        generatedLocalPartLabel: null
+      });
+    }
+
+    try {
+      const preview = await fetchActiveProviderPreview(providerType, options);
+      setProviderPreviewCache((cur) => ({ ...cur, [cacheKey]: preview }));
+      setActiveProviderPreview(preview);
+    } catch {
+      if (!cachedPreview) {
+        setActiveProviderPreview({
+          suffix: null,
+          providerHint: null,
+          usesTypedLocalPart: true,
+          generatedLocalPartLabel: null
+        });
+      }
+    }
+  }
+
+  async function loadSettingsForwardTargets(providerTypes: ProviderType[]) {
+    setForwardTargetsLoading(true);
+    try {
+      const entries = await Promise.all(
+        providerTypes.map(async (providerType) => {
+          try {
+            return [providerType, await fetchForwardAddresses(providerType)] as const;
+          } catch {
+            return [
+              providerType,
+              {
+                forwardAddresses: [],
+                source: "none" as const,
+                providerName:
+                  configuredProviders.find((provider) => provider.type === providerType)?.name ??
+                  supportedProviders.find((provider) => provider.type === providerType)?.label ??
+                  null
+              }
+            ] as const;
+          }
+        })
+      );
+
+      const nextStates = Object.fromEntries(entries) as Partial<Record<ProviderType, ForwardAddressState>>;
+      setSettingsForwardAddressStates(nextStates);
+      setForwardAddressCache((cur) => ({ ...cur, ...nextStates }));
     } finally {
       setForwardTargetsLoading(false);
     }
@@ -269,7 +404,14 @@ export default function App() {
         if (nextSession.authenticated) {
           const nextSettings = await fetchSettings();
           syncSettings(nextSettings);
-          await loadForwardTargets();
+          const defaultProviderType =
+            nextSettings.providerSettings.providers.find(
+              (provider) => provider.id === nextSettings.providerSettings.activeProviderId
+            )?.type;
+          await Promise.all([
+            loadForwardTargets(defaultProviderType),
+            loadSettingsForwardTargets(nextSettings.providerSettings.providers.map((provider) => provider.type))
+          ]);
           const [nextJobs, nextHistory] = await Promise.all([fetchJobs(), fetchHistory()]);
           setJobs(nextJobs);
           setHistory(nextHistory);
@@ -295,23 +437,76 @@ export default function App() {
   }, [activeView, session?.authenticated]);
 
   useEffect(() => {
-    if (!session?.authenticated || !activeProvider) {
-      setActiveProviderPreview({ suffix: null, providerHint: null });
+    if (!session?.authenticated || !selectedProvider) {
+      setActiveProviderPreview({ suffix: null, providerHint: null, usesTypedLocalPart: true, generatedLocalPartLabel: null });
       return;
     }
-    void fetchActiveProviderPreview()
-      .then(setActiveProviderPreview)
-      .catch(() => setActiveProviderPreview({ suffix: null, providerHint: null }));
-  }, [activeProvider?.id, session?.authenticated]);
+    void loadProviderPreview(selectedProvider.type, {
+      aliasFormat: form.aliasFormat || null,
+      domainName: form.domainName || null
+    });
+  }, [form.aliasFormat, form.domainName, selectedProvider?.type, session?.authenticated]);
+
+  useEffect(() => {
+    if (!session?.authenticated || !selectedProvider) {
+      return;
+    }
+
+    if (selectedProvider.type !== "addy") {
+      setForm((cur) =>
+        cur.aliasFormat || cur.domainName
+          ? {
+              ...cur,
+              aliasFormat: "",
+              domainName: ""
+            }
+          : cur
+      );
+      return;
+    }
+
+    setForm((cur) => {
+      const nextAliasFormat =
+        activeProviderPreview.aliasFormatOptions && activeProviderPreview.aliasFormatOptions.length > 0
+          ? activeProviderPreview.aliasFormatOptions.some((option) => option.value === cur.aliasFormat)
+            ? cur.aliasFormat
+            : activeProviderPreview.selectedAliasFormat ?? activeProviderPreview.aliasFormatOptions[0]?.value ?? ""
+          : "";
+      const nextDomainName =
+        activeProviderPreview.domainOptions && activeProviderPreview.domainOptions.length > 0
+          ? activeProviderPreview.domainOptions.some((option) => option.value === cur.domainName)
+            ? cur.domainName
+            : activeProviderPreview.selectedDomain ?? activeProviderPreview.domainOptions[0]?.value ?? ""
+          : "";
+
+      if (nextAliasFormat === cur.aliasFormat && nextDomainName === cur.domainName) {
+        return cur;
+      }
+
+      return {
+        ...cur,
+        aliasFormat: nextAliasFormat,
+        domainName: nextDomainName
+      };
+    });
+  }, [
+    activeProviderPreview.aliasFormatOptions,
+    activeProviderPreview.domainOptions,
+    activeProviderPreview.selectedAliasFormat,
+    activeProviderPreview.selectedDomain,
+    selectedProvider?.type,
+    session?.authenticated
+  ]);
 
   useEffect(() => {
     if (!session?.authenticated) {
       setForwardAddressState({ forwardAddresses: [], source: "none", providerName: null });
+      setSettingsForwardAddressStates({});
       return;
     }
 
-    void loadForwardTargets();
-  }, [activeProvider?.id, session?.authenticated]);
+    void loadForwardTargets(selectedProvider?.type);
+  }, [selectedProvider?.type, session?.authenticated]);
 
   useEffect(() => {
     setForm((cur) => ({
@@ -338,7 +533,14 @@ export default function App() {
       setSession(nextSession);
       const nextSettings = await fetchSettings();
       syncSettings(nextSettings);
-      await loadForwardTargets();
+      const defaultProviderType =
+        nextSettings.providerSettings.providers.find(
+          (provider) => provider.id === nextSettings.providerSettings.activeProviderId
+        )?.type;
+      await Promise.all([
+        loadForwardTargets(defaultProviderType),
+        loadSettingsForwardTargets(nextSettings.providerSettings.providers.map((provider) => provider.type))
+      ]);
       await loadAliases(filter);
     } catch (err) {
       setLoginError(err instanceof Error ? err.message : "Login failed.");
@@ -355,7 +557,10 @@ export default function App() {
     setJobs([]);
     setHistory([]);
     setForwardAddressState({ forwardAddresses: [], source: "none", providerName: null });
-    setActiveProviderPreview({ suffix: null, providerHint: null });
+    setForwardAddressCache({});
+    setSettingsForwardAddressStates({});
+    setProviderPreviewCache({});
+    setActiveProviderPreview({ suffix: null, providerHint: null, usesTypedLocalPart: true, generatedLocalPartLabel: null });
     setError(null);
     setSettingsError(null);
     setJobsError(null);
@@ -382,13 +587,29 @@ export default function App() {
         destinationEmail: form.destinationEmail,
         expiresInHours,
         label: form.label || null,
-        providerHint: activeProviderPreview.providerHint
+        providerHint: activeProviderPreview.providerHint,
+        providerType: selectedProvider?.type,
+        aliasFormat: form.aliasFormat || null,
+        domainName: form.domainName || null
       });
-      setForm({ ...emptyForm, localPart: randomAliasName(), destinationEmail: forwardAddresses[0] ?? "", expiresUnit: form.expiresUnit });
+      setForm((cur) => ({
+        ...emptyForm,
+        localPart: randomAliasName(),
+        destinationEmail: forwardAddresses[0] ?? "",
+        expiresUnit: cur.expiresUnit,
+        providerType: cur.providerType,
+        aliasFormat: cur.aliasFormat,
+        domainName: cur.domainName
+      }));
       try {
-        setActiveProviderPreview(await fetchActiveProviderPreview());
+        if (selectedProvider?.type) {
+          await loadProviderPreview(selectedProvider.type, {
+            aliasFormat: form.aliasFormat || null,
+            domainName: form.domainName || null
+          });
+        }
       } catch {
-        setActiveProviderPreview({ suffix: null, providerHint: null });
+        setActiveProviderPreview({ suffix: null, providerHint: null, usesTypedLocalPart: true, generatedLocalPartLabel: null });
       }
       await loadAliases(filter);
       showToast("Alias created.");
@@ -408,7 +629,8 @@ export default function App() {
         providerSettings: {
           supportedProviders,
           providers: settingsForm.providers,
-          activeProviderId: settingsForm.activeProviderId
+          activeProviderId: settingsForm.activeProviderId,
+          providerAliasCounts
         },
         lifecycleSettings: {
           historyRetentionDays: Number(settingsForm.historyRetentionDays)
@@ -416,7 +638,14 @@ export default function App() {
         securitySettings: { sessionTtlMs: settings?.securitySettings.sessionTtlMs ?? 0 }
       });
       syncSettings(nextSettings);
-      await loadForwardTargets();
+      const defaultProviderType =
+        nextSettings.providerSettings.providers.find(
+          (provider) => provider.id === nextSettings.providerSettings.activeProviderId
+        )?.type;
+      await Promise.all([
+        loadForwardTargets(defaultProviderType),
+        loadSettingsForwardTargets(nextSettings.providerSettings.providers.map((provider) => provider.type))
+      ]);
       showToast(successMessage);
     } catch (err) {
       setSettingsError(err instanceof Error ? err.message : "Failed to save settings.");
@@ -650,17 +879,17 @@ export default function App() {
             Control center
           </p>
           <h1 className="mt-3 font-serif text-4xl leading-none text-white sm:text-5xl lg:text-6xl">
-            {activeProvider ? `${activeProvider.name} is the active provider.` : "Provider setup needed."}
+            {defaultProvider ? `${defaultProvider.name} is the default provider.` : "Provider setup needed."}
           </h1>
           <p className="mt-5 max-w-3xl text-sm leading-7 text-slate-300 sm:text-base">
-            {activeProvider
+            {defaultProvider
               ? "Use the dashboard to create new aliases, adjust expirations, and refresh provider state when needed."
-              : "Configure and activate a provider in settings before creating aliases."}
+              : "Configure a provider and set a default in settings before creating aliases."}
           </p>
           <div className="mt-8 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             <div className="rounded-[1.1rem] border border-white/8 bg-[#151c26]/92 px-4 py-4">
-              <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Active provider</span>
-              <strong className="mt-2 block text-xl text-white">{activeProvider?.name ?? "None selected"}</strong>
+              <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Default provider</span>
+              <strong className="mt-2 block text-xl text-white">{defaultProvider?.name ?? "None selected"}</strong>
             </div>
             <div className="rounded-[1.1rem] border border-white/8 bg-[#151c26]/92 px-4 py-4">
               <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Last provider sync</span>
@@ -688,8 +917,10 @@ export default function App() {
               loading={loading}
               syncSubmitting={syncSubmitting}
               form={form}
-              activeProvider={activeProvider}
-              activeProviderMeta={activeProviderMeta}
+              selectedProvider={selectedProvider}
+              selectedProviderMeta={selectedProviderMeta}
+              providerPreview={activeProviderPreview}
+              providerAliasCounts={providerAliasCounts}
               forwardAddresses={forwardAddresses}
               forwardAddressSource={forwardAddressState.source}
               aliasPreview={aliasPreview}
@@ -719,9 +950,8 @@ export default function App() {
               settingsError={settingsError}
               savingSection={savingSettingsSection}
               forwardTargetsLoading={forwardTargetsLoading}
-              activeForwardAddressSource={forwardAddressState.source}
-              activeForwardAddresses={forwardAddresses}
-              activeForwardAddressProviderName={forwardAddressState.providerName}
+              providerForwardAddressStates={settingsForwardAddressStates}
+              providerAliasCounts={providerAliasCounts}
               onSetActive={(id) => setSettingsForm((cur) => ({ ...cur, activeProviderId: id }))}
               onSetActiveBlocked={(message) => showToast(message, "info")}
               onRenameProvider={(id, name) => updateProvider(id, (p) => ({ ...p, name }))}
@@ -755,7 +985,22 @@ export default function App() {
                             : p.config.lastConnectionTestSucceededAt ?? null,
                           lastConnectionTestVerificationToken: secret.trim()
                             ? null
-                            : p.config.lastConnectionTestVerificationToken ?? null
+                            : p.config.lastConnectionTestVerificationToken ?? null,
+                          supportsCustomAliases: secret.trim()
+                            ? null
+                            : p.config.supportsCustomAliases ?? null,
+                          defaultAliasDomain: secret.trim()
+                            ? null
+                            : p.config.defaultAliasDomain ?? null,
+                          defaultAliasFormat: secret.trim()
+                            ? null
+                            : p.config.defaultAliasFormat ?? null,
+                          domainOptions: secret.trim()
+                            ? []
+                            : p.config.domainOptions ?? [],
+                          maxRecipientCount: secret.trim()
+                            ? null
+                            : p.config.maxRecipientCount ?? null
                         }
                       }
                 )
@@ -782,26 +1027,48 @@ export default function App() {
                           hasStoredSecret: false,
                           clearStoredSecret: true,
                           lastConnectionTestSucceededAt: null,
-                          lastConnectionTestVerificationToken: null
+                          lastConnectionTestVerificationToken: null,
+                          supportsCustomAliases: null,
+                          defaultAliasDomain: null,
+                          defaultAliasFormat: null,
+                          domainOptions: [],
+                          maxRecipientCount: null
                         }
                       }
                 )
               }
-              onConnectionTestSuccess={(id, testedAt, verificationToken) =>
+              onConnectionTestSuccess={(id, testedAt, verificationToken, capabilities) =>
                 updateProvider(id, (p) =>
-                  ({
-                    ...p,
-                    config: {
-                      ...p.config,
-                      clearStoredSecret: false,
-                      lastConnectionTestSucceededAt: testedAt,
-                      lastConnectionTestVerificationToken: verificationToken
-                    }
-                  } as ConfiguredProvider)
+                  p.type === "addy"
+                    ? ({
+                        ...p,
+                        config: {
+                          ...p.config,
+                          clearStoredSecret: false,
+                          lastConnectionTestSucceededAt: testedAt,
+                          lastConnectionTestVerificationToken: verificationToken,
+                          supportsCustomAliases: capabilities?.supportsCustomAliases ?? null,
+                          defaultAliasDomain: capabilities?.defaultAliasDomain ?? null,
+                          defaultAliasFormat: capabilities?.defaultAliasFormat ?? null,
+                          domainOptions: capabilities?.domainOptions ?? [],
+                          maxRecipientCount: capabilities?.maxRecipientCount ?? null
+                        }
+                      } as ConfiguredProvider)
+                    : ({
+                        ...p,
+                        config: {
+                          ...p.config,
+                          clearStoredSecret: false,
+                          lastConnectionTestSucceededAt: testedAt,
+                          lastConnectionTestVerificationToken: verificationToken
+                        }
+                      } as ConfiguredProvider)
                 )
               }
               onHistoryRetentionDaysChange={(value) => setSettingsForm((cur) => ({ ...cur, historyRetentionDays: value }))}
-              onRefreshForwardTargets={loadForwardTargets}
+              onRefreshForwardTargets={async () => {
+                await loadSettingsForwardTargets(settingsForm.providers.map((provider) => provider.type));
+              }}
               onSaveProvider={handleSaveProvider}
               onSaveHistoryRetention={handleSaveHistoryRetention}
             />
