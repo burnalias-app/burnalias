@@ -92,6 +92,7 @@ export function DashboardView({
   const configuredProviderTypeSet = new Set(configuredProviderTypes);
   const usesTypedLocalPart = providerPreview.usesTypedLocalPart !== false;
   const isAddy = selectedProvider?.type === "addy";
+  const addySelectedFormat = form.aliasFormat || providerPreview.aliasFormatOptions?.[0]?.value || "";
 
   return (
     <div className="grid min-w-0 gap-5">
@@ -129,27 +130,85 @@ export function DashboardView({
         </div>
 
         <form className="grid gap-5" onSubmit={onSubmit}>
-          <div className="grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {usesTypedLocalPart ? (
-              <label className="grid gap-2">
-                <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
-                  <span>Alias name</span>
+          {usesTypedLocalPart ? (
+            <>
+              <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)]">
+                <div className="relative grid gap-2">
+                  <div>
+                    <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Alias name</span>
+                  </div>
                   <RefreshButton
                     loading={false}
                     onClick={() => onFormChange((cur) => ({ ...cur, localPart: randomAliasName() }))}
                     label="Regenerate alias name"
+                    className="absolute right-0 top-0 h-4 w-4 text-zinc-400 hover:text-zinc-200"
+                    iconClassName="h-4 w-4"
                   />
-                </span>
-                <input
-                  className={fieldClassName()}
-                  value={form.localPart}
-                  onChange={(e) => onFormChange((cur) => ({ ...cur, localPart: e.target.value }))}
-                  placeholder="cedar"
-                  required
-                />
-              </label>
-            ) : null}
-            {isAddy && providerPreview.aliasFormatOptions && providerPreview.aliasFormatOptions.length > 0 ? (
+                  <input
+                    className={fieldClassName()}
+                    value={form.localPart}
+                    onChange={(e) => onFormChange((cur) => ({ ...cur, localPart: e.target.value }))}
+                    placeholder="cedar"
+                    required
+                  />
+                </div>
+                <label className="grid gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Forward to</span>
+                  <select
+                    className={fieldClassName()}
+                    value={form.destinationEmail}
+                    onChange={(e) => onFormChange((cur) => ({ ...cur, destinationEmail: e.target.value }))}
+                    required
+                    disabled={forwardAddresses.length === 0}
+                  >
+                    {forwardAddresses.length === 0 ? (
+                      <option value="">No verified forward targets available</option>
+                    ) : null}
+                    {forwardAddresses.map((address) => (
+                      <option key={address} value={address}>{address}</option>
+                    ))}
+                  </select>
+                </label>
+                <div className="grid min-w-0 gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Expires in</span>
+                  <div className="grid grid-cols-[minmax(0,1fr)_6.5rem] gap-2">
+                    <input
+                      className={`${fieldClassName()} min-w-0`}
+                      type="number"
+                      min="1"
+                      step="1"
+                      inputMode="numeric"
+                      value={form.expiresAmount}
+                      onChange={(e) => onFormChange((cur) => ({ ...cur, expiresAmount: e.target.value }))}
+                      placeholder="30"
+                    />
+                    <select
+                      className="w-24 shrink-0 rounded-[1.1rem] border border-white/10 bg-[#141b24] px-3 py-3 text-slate-100 outline-none transition focus:border-[#d7a968]/50 focus:ring-2 focus:ring-[#d7a968]/20"
+                      value={form.expiresUnit}
+                      onChange={(e) => onFormChange((cur) => ({ ...cur, expiresUnit: e.target.value as "h" | "d" }))}
+                    >
+                      <option value="h">hours</option>
+                      <option value="d">days</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid min-w-0 gap-4">
+                <label className="grid gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Label</span>
+                  <input
+                    className={fieldClassName()}
+                    value={form.label}
+                    onChange={(e) => onFormChange((cur) => ({ ...cur, label: e.target.value }))}
+                    placeholder="shopping"
+                  />
+                </label>
+              </div>
+            </>
+          ) : (
+            <>
+            <div className="grid min-w-0 gap-4 xl:grid-cols-3">
               <label className="grid gap-2">
                 <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Alias format</span>
                 <select
@@ -157,15 +216,78 @@ export function DashboardView({
                   value={form.aliasFormat}
                   onChange={(e) => onFormChange((cur) => ({ ...cur, aliasFormat: e.target.value }))}
                 >
-                  {providerPreview.aliasFormatOptions.map((option) => (
+                  {(providerPreview.aliasFormatOptions ?? []).map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
                     </option>
                   ))}
                 </select>
               </label>
+              <label className="grid gap-2">
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Forward to</span>
+                <select
+                  className={fieldClassName()}
+                  value={form.destinationEmail}
+                  onChange={(e) => onFormChange((cur) => ({ ...cur, destinationEmail: e.target.value }))}
+                  required
+                  disabled={forwardAddresses.length === 0}
+                >
+                  {forwardAddresses.length === 0 ? (
+                    <option value="">No verified forward targets available</option>
+                  ) : null}
+                  {forwardAddresses.map((address) => (
+                    <option key={address} value={address}>{address}</option>
+                  ))}
+                </select>
+              </label>
+              <div className="grid min-w-0 gap-2">
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Expires in</span>
+                <div className="grid grid-cols-[minmax(0,1fr)_6.5rem] gap-2">
+                  <input
+                    className={`${fieldClassName()} min-w-0`}
+                    type="number"
+                    min="1"
+                    step="1"
+                    inputMode="numeric"
+                    value={form.expiresAmount}
+                    onChange={(e) => onFormChange((cur) => ({ ...cur, expiresAmount: e.target.value }))}
+                  placeholder="30"
+                />
+                  <select
+                    className="w-24 shrink-0 rounded-[1.1rem] border border-white/10 bg-[#141b24] px-3 py-3 text-slate-100 outline-none transition focus:border-[#d7a968]/50 focus:ring-2 focus:ring-[#d7a968]/20"
+                    value={form.expiresUnit}
+                    onChange={(e) => onFormChange((cur) => ({ ...cur, expiresUnit: e.target.value as "h" | "d" }))}
+                  >
+                    <option value="h">hours</option>
+                    <option value="d">days</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            {addySelectedFormat === "custom" ? (
+              <div className="grid min-w-0 gap-4 xl:grid-cols-3">
+                <label className="grid gap-2 xl:col-start-1">
+                  <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Custom Alias</span>
+                  <input
+                    className={fieldClassName()}
+                    value={form.localPart}
+                    onChange={(e) => onFormChange((cur) => ({ ...cur, localPart: e.target.value }))}
+                    placeholder="cedar"
+                    required
+                  />
+                </label>
+              </div>
             ) : null}
-            {isAddy && providerPreview.domainOptions && providerPreview.domainOptions.length > 0 ? (
+            <div className="grid min-w-0 gap-4 md:grid-cols-2">
+              <label className="grid gap-2">
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Label</span>
+                <input
+                  className={fieldClassName()}
+                  value={form.label}
+                  onChange={(e) => onFormChange((cur) => ({ ...cur, label: e.target.value }))}
+                  placeholder="shopping"
+                />
+              </label>
               <label className="grid gap-2">
                 <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Domain</span>
                 <select
@@ -173,61 +295,16 @@ export function DashboardView({
                   value={form.domainName}
                   onChange={(e) => onFormChange((cur) => ({ ...cur, domainName: e.target.value }))}
                 >
-                  {providerPreview.domainOptions.map((option) => (
+                  {(providerPreview.domainOptions ?? []).map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
                     </option>
                   ))}
                 </select>
               </label>
-            ) : null}
-            <label className="grid gap-2">
-              <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Forward to</span>
-              <select
-                className={fieldClassName()}
-                value={form.destinationEmail}
-                onChange={(e) => onFormChange((cur) => ({ ...cur, destinationEmail: e.target.value }))}
-                required
-                disabled={forwardAddresses.length === 0}
-              >
-                {forwardAddresses.length === 0 ? (
-                  <option value="">No verified forward targets available</option>
-                ) : null}
-                {forwardAddresses.map((address) => (
-                  <option key={address} value={address}>{address}</option>
-                ))}
-              </select>
-            </label>
-            <div className="grid min-w-0 gap-2 md:col-span-2 xl:col-span-1">
-              <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Expires in</span>
-              <div className="grid grid-cols-[minmax(0,1fr)_6.5rem] gap-2">
-                <input
-                  className={`${fieldClassName()} min-w-0`}
-                  type="number"
-                  min="1"
-                  step="1"
-                  inputMode="numeric"
-                  value={form.expiresAmount}
-                  onChange={(e) => onFormChange((cur) => ({ ...cur, expiresAmount: e.target.value }))}
-                  placeholder="30"
-                />
-                <select
-                  className="w-24 shrink-0 rounded-[1.1rem] border border-white/10 bg-[#141b24] px-3 py-3 text-slate-100 outline-none transition focus:border-[#d7a968]/50 focus:ring-2 focus:ring-[#d7a968]/20"
-                  value={form.expiresUnit}
-                  onChange={(e) => onFormChange((cur) => ({ ...cur, expiresUnit: e.target.value as "h" | "d" }))}
-                >
-                  <option value="h">hours</option>
-                  <option value="d">days</option>
-                </select>
-              </div>
             </div>
-          </div>
-
-          {isAddy && providerPreview.maxRecipientCount === 1 ? (
-            <p className="text-xs leading-5 text-slate-400">
-              Addy.io free plans allow one recipient mailbox per alias.
-            </p>
-          ) : null}
+            </>
+          )}
 
           <div className="grid min-w-0 gap-4 xl:grid-cols-[1.2fr_0.8fr]">
             <section className={panelClassName("min-w-0 p-4 sm:p-5")}>
@@ -236,7 +313,7 @@ export function DashboardView({
               <p className="mt-3 text-sm leading-6 text-slate-400">
                 {usesTypedLocalPart
                   ? "BurnAlias builds the full alias using the selected provider domain, then starts the expiration countdown from the moment the alias is created."
-                  : "The provider will generate the local part for this alias when it is created. BurnAlias can only preview the format, not the exact generated value."}
+                  : "The provider will generate the alias upon creation. Expiration is measured from the moment the alias is created."}
               </p>
             </section>
             <section className={panelClassName("min-w-0 p-4 sm:p-5")}>
@@ -249,16 +326,6 @@ export function DashboardView({
               ) : null}
             </section>
           </div>
-
-          <label className="grid gap-2">
-            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Label</span>
-            <input
-              className={fieldClassName()}
-              value={form.label}
-              onChange={(e) => onFormChange((cur) => ({ ...cur, label: e.target.value }))}
-              placeholder="shopping"
-            />
-          </label>
 
           <div className="flex flex-col gap-4 border-t border-white/10 pt-4 md:flex-row md:items-center md:justify-between">
             <p className="max-w-2xl text-sm leading-6 text-slate-400">

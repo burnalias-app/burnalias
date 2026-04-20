@@ -33,6 +33,9 @@ function buildStoredAddyPreview(
   options?: { aliasFormat?: string; domainName?: string }
 ) {
   const supportsCustomAliases = provider.config.supportsCustomAliases === true;
+  const availableFormats = supportsCustomAliases
+    ? ["custom", "random_words", "random_male_name", "random_female_name", "random_noun", "random_characters", "uuid"]
+    : ["random_characters", "uuid"];
   const domainOptions =
     provider.config.domainOptions && provider.config.domainOptions.length > 0
       ? provider.config.domainOptions
@@ -47,11 +50,16 @@ function buildStoredAddyPreview(
     provider.config.defaultAliasFormat && ["random_characters", "uuid"].includes(provider.config.defaultAliasFormat)
       ? provider.config.defaultAliasFormat
       : "random_characters";
-  const selectedAliasFormat = supportsCustomAliases
-    ? "custom"
-    : options?.aliasFormat && ["random_characters", "uuid"].includes(options.aliasFormat)
+  const defaultPaidFormat =
+    provider.config.defaultAliasFormat && availableFormats.includes(provider.config.defaultAliasFormat)
+      ? provider.config.defaultAliasFormat
+      : "custom";
+  const selectedAliasFormat =
+    options?.aliasFormat && availableFormats.includes(options.aliasFormat)
       ? options.aliasFormat
-      : defaultFreePlanFormat;
+      : supportsCustomAliases
+        ? defaultPaidFormat
+        : defaultFreePlanFormat;
 
   if (!selectedDomain) {
     return null;
@@ -60,18 +68,37 @@ function buildStoredAddyPreview(
   return {
     suffix: `@${selectedDomain}`,
     providerHint: selectedDomain,
-    usesTypedLocalPart: supportsCustomAliases,
-    generatedLocalPartLabel: supportsCustomAliases
+    usesTypedLocalPart: selectedAliasFormat === "custom",
+    generatedLocalPartLabel: selectedAliasFormat === "custom"
       ? null
       : selectedAliasFormat === "uuid"
         ? "uuid"
-        : "random-characters",
-    aliasFormatOptions: supportsCustomAliases
-      ? []
-      : [
-          { value: "random_characters", label: "Random characters" },
-          { value: "uuid", label: "UUID" }
-        ],
+        : selectedAliasFormat === "random_words"
+          ? "random-words"
+          : selectedAliasFormat === "random_male_name"
+            ? "random-male-name"
+            : selectedAliasFormat === "random_female_name"
+              ? "random-female-name"
+              : selectedAliasFormat === "random_noun"
+                ? "random-noun"
+                : "random-characters",
+    aliasFormatOptions: availableFormats.map((format) => ({
+      value: format,
+      label:
+        format === "custom"
+          ? "Custom Alias"
+          : format === "random_words"
+            ? "Random Words"
+            : format === "random_male_name"
+              ? "Random Male Name"
+              : format === "random_female_name"
+                ? "Random Female Name"
+                : format === "random_noun"
+                  ? "Random Noun"
+                  : format === "random_characters"
+                    ? "Random characters"
+                    : "UUID"
+    })),
     selectedAliasFormat,
     domainOptions: domainOptions.map((domain) => ({ value: domain, label: domain })),
     selectedDomain,

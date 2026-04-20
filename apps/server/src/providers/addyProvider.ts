@@ -59,6 +59,40 @@ interface AddyAlias {
   recipients?: AddyRecipient[];
 }
 
+const FREE_ALIAS_FORMATS = ["random_characters", "uuid"] as const;
+const PAID_ALIAS_FORMATS = [
+  "custom",
+  "random_words",
+  "random_male_name",
+  "random_female_name",
+  "random_noun",
+  "random_characters",
+  "uuid"
+] as const;
+const FREE_ALIAS_FORMATS_LIST = [...FREE_ALIAS_FORMATS] as string[];
+const PAID_ALIAS_FORMATS_LIST = [...PAID_ALIAS_FORMATS] as string[];
+
+function addyAliasFormatOptions(supportsCustomAliases: boolean): Array<{ value: string; label: string }> {
+  const formats = supportsCustomAliases ? PAID_ALIAS_FORMATS : FREE_ALIAS_FORMATS;
+  return formats.map((format) => ({
+    value: format,
+    label:
+      format === "custom"
+        ? "Custom Alias"
+        : format === "random_words"
+          ? "Random Words"
+          : format === "random_male_name"
+            ? "Random Male Name"
+            : format === "random_female_name"
+              ? "Random Female Name"
+              : format === "random_noun"
+                ? "Random Noun"
+                : format === "random_characters"
+                  ? "Random characters"
+                  : "UUID"
+  }));
+}
+
 export class AddyProvider implements AliasProvider {
   readonly name = "addy";
   private accountDetailsCache: { value: AddyAccountDetails; expiresAt: number } | null = null;
@@ -151,24 +185,25 @@ export class AddyProvider implements AliasProvider {
       tokenDetails.default_alias_format && ["random_characters", "uuid"].includes(tokenDetails.default_alias_format)
         ? tokenDetails.default_alias_format
         : "random_characters";
-    const selectedAliasFormat = supportsCustomAliases
-      ? "custom"
-      : input?.aliasFormat && ["random_characters", "uuid"].includes(input.aliasFormat)
+    const availableFormats = supportsCustomAliases ? PAID_ALIAS_FORMATS_LIST : FREE_ALIAS_FORMATS_LIST;
+    const defaultPaidFormat =
+      tokenDetails.default_alias_format && availableFormats.includes(tokenDetails.default_alias_format)
+        ? tokenDetails.default_alias_format
+        : "custom";
+    const selectedAliasFormat =
+      input?.aliasFormat && availableFormats.includes(input.aliasFormat)
         ? input.aliasFormat
-        : defaultFreePlanFormat;
+        : supportsCustomAliases
+          ? defaultPaidFormat
+          : defaultFreePlanFormat;
     return {
       displaySuffix: `@${selectedDomain}`,
       providerHint: selectedDomain,
-      usesTypedLocalPart: supportsCustomAliases,
-      generatedLocalPartLabel: supportsCustomAliases
+      usesTypedLocalPart: selectedAliasFormat === "custom",
+      generatedLocalPartLabel: selectedAliasFormat === "custom"
         ? null
         : this.describeAliasFormat(selectedAliasFormat),
-      aliasFormatOptions: supportsCustomAliases
-        ? []
-        : [
-            { value: "random_characters", label: "Random characters" },
-            { value: "uuid", label: "UUID" }
-          ],
+      aliasFormatOptions: addyAliasFormatOptions(supportsCustomAliases),
       selectedAliasFormat,
       domainOptions: domainOptions.map((domain) => ({ value: domain, label: domain })),
       selectedDomain,
@@ -198,11 +233,20 @@ export class AddyProvider implements AliasProvider {
       tokenDetails.default_alias_format && ["random_characters", "uuid"].includes(tokenDetails.default_alias_format)
         ? tokenDetails.default_alias_format
         : "random_characters";
-    const selectedFormat = supportsCustomAliases
-      ? "custom"
-      : input.aliasFormat && ["random_characters", "uuid"].includes(input.aliasFormat)
+    const availableFormats = supportsCustomAliases ? PAID_ALIAS_FORMATS_LIST : FREE_ALIAS_FORMATS_LIST;
+    const defaultPaidFormat =
+      tokenDetails.default_alias_format && availableFormats.includes(tokenDetails.default_alias_format)
+        ? tokenDetails.default_alias_format
+        : "custom";
+    const selectedFormat =
+      input.aliasFormat && availableFormats.includes(input.aliasFormat)
         ? input.aliasFormat
-        : defaultFreePlanFormat;
+        : supportsCustomAliases
+          ? defaultPaidFormat
+          : defaultFreePlanFormat;
+    if (selectedFormat === "custom" && !input.localPart.trim()) {
+      throw new Error("Custom Alias requires a local part.");
+    }
     const domainOptions = await this.listDomainOptions(tokenDetails.default_alias_domain);
     const selectedDomain =
       input.domainName && domainOptions.includes(input.domainName)
@@ -213,7 +257,7 @@ export class AddyProvider implements AliasProvider {
       body: JSON.stringify({
         domain: selectedDomain,
         format: selectedFormat,
-        ...(supportsCustomAliases ? { local_part: input.localPart } : {}),
+        ...(selectedFormat === "custom" ? { local_part: input.localPart } : {}),
         description: input.note ?? input.label ?? null,
         recipient_ids: [selectedRecipient.id]
       })

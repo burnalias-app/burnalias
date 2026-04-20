@@ -264,15 +264,6 @@ export default function App() {
     const cachedState = forwardAddressCache[providerType];
     if (cachedState) {
       setForwardAddressState(cachedState);
-    } else {
-      setForwardAddressState({
-        forwardAddresses: [],
-        source: "none",
-        providerName:
-          configuredProviders.find((provider) => provider.type === providerType)?.name ??
-          defaultProvider?.name ??
-          null
-      });
     }
 
     setForwardTargetsLoading(true);
@@ -281,7 +272,7 @@ export default function App() {
       setForwardAddressCache((cur) => ({ ...cur, [providerType]: nextState }));
       setForwardAddressState(nextState);
     } catch {
-      if (!cachedState) {
+      if (!cachedState && !forwardAddressState.forwardAddresses.length) {
         setForwardAddressState({
           forwardAddresses: [],
           source: "none",
@@ -308,13 +299,6 @@ export default function App() {
 
     if (cachedPreview) {
       setActiveProviderPreview(cachedPreview);
-    } else {
-      setActiveProviderPreview({
-        suffix: null,
-        providerHint: null,
-        usesTypedLocalPart: providerType === "addy" ? undefined : true,
-        generatedLocalPartLabel: null
-      });
     }
 
     try {
@@ -322,7 +306,7 @@ export default function App() {
       setProviderPreviewCache((cur) => ({ ...cur, [cacheKey]: preview }));
       setActiveProviderPreview(preview);
     } catch {
-      if (!cachedPreview) {
+      if (!cachedPreview && !activeProviderPreview.suffix && !activeProviderPreview.providerHint) {
         setActiveProviderPreview({
           suffix: null,
           providerHint: null,
@@ -796,7 +780,7 @@ export default function App() {
   }
 
   return (
-    <main className="mx-auto box-border w-full max-w-7xl px-4 py-5 sm:px-6 sm:py-6">
+    <main className="mx-auto box-border w-full max-w-[90rem] px-4 py-5 sm:px-6 sm:py-6">
       {toast ? (
         <div className="pointer-events-none fixed right-4 top-4 z-50 flex w-[min(24rem,calc(100vw-2rem))] justify-end sm:right-6 sm:top-6">
           <div

@@ -303,6 +303,176 @@ test("Addy free-plan alias creation uses the provider-generated format instead o
   }
 });
 
+test("Addy paid preview exposes premium alias formats and only uses typed local parts for custom aliases", async () => {
+  const provider = new AddyProvider("test-key");
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+    if (url.endsWith("/api/v1/account-details")) {
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              username: "johndoe",
+              from_name: "John Doe",
+              default_alias_domain: "anonaddy.me",
+              default_alias_format: "random_words",
+              subscription: "pro",
+              recipient_limit: 20
+            }
+          ]
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    if (url.endsWith("/api/v1/domain-options")) {
+      return new Response(
+        JSON.stringify({
+          data: ["anonaddy.me", "custom.example.com"]
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  }) as typeof globalThis.fetch;
+
+  try {
+    const preview = await provider.getAliasPreview();
+
+    assert.equal(preview?.displaySuffix, "@anonaddy.me");
+    assert.equal(preview?.usesTypedLocalPart, false);
+    assert.equal(preview?.generatedLocalPartLabel, "random-words");
+    assert.equal(preview?.selectedAliasFormat, "random_words");
+    assert.deepEqual(preview?.aliasFormatOptions, [
+      { value: "custom", label: "Custom Alias" },
+      { value: "random_words", label: "Random Words" },
+      { value: "random_male_name", label: "Random Male Name" },
+      { value: "random_female_name", label: "Random Female Name" },
+      { value: "random_noun", label: "Random Noun" },
+      { value: "random_characters", label: "Random characters" },
+      { value: "uuid", label: "UUID" }
+    ]);
+
+    const customPreview = await provider.getAliasPreview({
+      aliasFormat: "custom",
+      domainName: "custom.example.com"
+    });
+
+    assert.equal(customPreview?.displaySuffix, "@custom.example.com");
+    assert.equal(customPreview?.usesTypedLocalPart, true);
+    assert.equal(customPreview?.generatedLocalPartLabel, null);
+    assert.equal(customPreview?.selectedAliasFormat, "custom");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Addy paid custom alias creation sends local_part and selected custom domain", async () => {
+  const provider = new AddyProvider("test-key");
+  const originalFetch = globalThis.fetch;
+  const capturedBodies: string[] = [];
+
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+    if (url.endsWith("/api/v1/recipients?filter[verified]=true&page[number]=1&page[size]=100")) {
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: "recipient-1",
+              email: "me@example.com",
+              email_verified_at: "2026-04-18T00:00:00.000Z"
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        }
+      );
+    }
+
+    if (url.endsWith("/api/v1/account-details")) {
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              username: "johndoe",
+              from_name: null,
+              default_alias_domain: "anonaddy.me",
+              default_alias_format: "random_words",
+              subscription: "pro"
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        }
+      );
+    }
+
+    if (url.endsWith("/api/v1/domain-options")) {
+      return new Response(
+        JSON.stringify({
+          data: ["anonaddy.me", "custom.example.com"]
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        }
+      );
+    }
+
+    if (url.endsWith("/api/v1/aliases") && init?.method === "POST") {
+      capturedBodies.push(String(init.body ?? ""));
+      return new Response(
+        JSON.stringify({
+          data: {
+            id: "alias-1",
+            email: "atlas@custom.example.com",
+            active: true,
+            description: "Label: shopping"
+          }
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        }
+      );
+    }
+
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const alias = await provider.createAlias({
+      localPart: "atlas",
+      destinationEmail: "me@example.com",
+      aliasFormat: "custom",
+      domainName: "custom.example.com",
+      label: "shopping"
+    });
+
+    assert.equal(alias.email, "atlas@custom.example.com");
+    assert.equal(capturedBodies.length, 1);
+    assert.deepEqual(JSON.parse(capturedBodies[0] ?? "{}"), {
+      domain: "custom.example.com",
+      format: "custom",
+      local_part: "atlas",
+      description: "shopping",
+      recipient_ids: ["recipient-1"]
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("replacing a provider key invalidates readiness until it is retested", () => {
   const db = createTestDb();
   const aliasRepository = new AliasRepository(db);

@@ -25,6 +25,9 @@ data/.burnalias-secrets-key
 *.log
 logs/
 
+# Local planning / working notes
+TODO.local.md
+
 # Test coverage
 coverage/
 *.lcov

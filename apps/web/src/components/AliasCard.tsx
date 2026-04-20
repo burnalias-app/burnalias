@@ -25,6 +25,15 @@ const statusStyles: Record<Alias["status"], string> = {
   deleted: "bg-red-500/12 text-red-200"
 };
 
+function renderBreakableAddress(value: string) {
+  return value.split(/([@._-])/).map((segment, index) => (
+    <span key={`${segment}-${index}`}>
+      {segment}
+      {segment === "@" || segment === "." || segment === "_" || segment === "-" ? <wbr /> : null}
+    </span>
+  ));
+}
+
 export function AliasCard({
   alias,
   providerRemovedFromApp = false,
@@ -42,6 +51,7 @@ export function AliasCard({
   const [editEnabled, setEditEnabled] = useState(alias.status === "active");
   const [saving, setSaving] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   function openEditModal() {
     setEditDestinationEmail(alias.destinationEmail);
@@ -86,12 +96,58 @@ export function AliasCard({
     await onDelete(alias.id);
   }
 
+  async function handleCopyAlias() {
+    await navigator.clipboard.writeText(alias.email);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  }
+
   return (
     <>
       <article className={panelClassName("min-w-0 p-4 sm:p-5")}>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
-            <h3 className="break-words font-serif text-lg text-white sm:text-xl">{alias.email}</h3>
+            <div className="flex min-w-0 items-start gap-2">
+              <h3 className="min-w-0 font-serif text-lg text-white sm:text-xl">{renderBreakableAddress(alias.email)}</h3>
+              <button
+                type="button"
+                onClick={() => void handleCopyAlias()}
+                className="mt-0.5 inline-flex h-8 w-8 shrink-0 self-start items-center justify-center rounded-full text-zinc-400 transition hover:text-zinc-200"
+                aria-label={copied ? "Alias copied" : "Copy alias"}
+                title={copied ? "Alias copied" : "Copy alias"}
+              >
+                {copied ? (
+                  <svg
+                    className="h-4 w-4"
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M20 6 9 17l-5-5" />
+                  </svg>
+                ) : (
+                  <svg
+                    className="h-4 w-4"
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                  </svg>
+                )}
+              </button>
+            </div>
           </div>
           <span className={["inline-flex w-fit rounded-full px-3 py-1 text-xs font-semibold capitalize", statusStyles[alias.status]].join(" ")}>
             {alias.status}
@@ -111,7 +167,7 @@ export function AliasCard({
           </div>
           <div>
             <dt className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Forwards to</dt>
-            <dd className="mt-1 break-words text-sm text-slate-200">{alias.destinationEmail}</dd>
+            <dd className="mt-1 text-sm text-slate-200">{renderBreakableAddress(alias.destinationEmail)}</dd>
           </div>
           <div>
             <dt className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Label</dt>
@@ -174,7 +230,7 @@ export function AliasCard({
 
       {editingAlias ? (
         <Modal title="Edit alias" onClose={() => setEditingAlias(false)}>
-          <p className="mb-4 wrap-break-word text-sm text-slate-400">{alias.email}</p>
+          <p className="mb-4 text-sm text-slate-400">{renderBreakableAddress(alias.email)}</p>
 
           <div className="grid gap-4">
             <label className="flex items-center justify-between gap-4 rounded-[1.1rem] border border-white/10 bg-[#141b24]/88 px-4 py-3">
