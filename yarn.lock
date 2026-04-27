@@ -220,7 +220,7 @@ __metadata:
     better-sqlite3: "npm:^11.8.1"
     dotenv: "npm:^16.5.0"
     express: "npm:^4.21.2"
-    express-rate-limit: "npm:^7.5.1"
+    express-rate-limit: "npm:^8.4.1"
     pino: "npm:^10.3.1"
     pino-http: "npm:^11.0.0"
     pino-pretty: "npm:^13.0.0"
@@ -2388,12 +2388,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"express-rate-limit@npm:^7.5.1":
-  version: 7.5.1
-  resolution: "express-rate-limit@npm:7.5.1"
+"express-rate-limit@npm:^8.4.1":
+  version: 8.4.1
+  resolution: "express-rate-limit@npm:8.4.1"
+  dependencies:
+    ip-address: "npm:10.1.0"
   peerDependencies:
     express: ">= 4.11"
-  checksum: 10c0/b07de84d700a2c07c4bf2f040e7558ed5a1f660f03ed5f30bf8ff7b51e98ba7a85215640e70fc48cbbb9151066ea51239d9a1b41febc9b84d98c7915b0186161
+  checksum: 10c0/ead87bcf7b9b4094d2a597b6a77569eed34c7d2ff3a449eeef25e1cd4a96dc3de17b8da93e8cf82f757ef441974846138b4bc371621fbc72346f8cc4a07a712b
   languageName: node
   linkType: hard
 
@@ -2845,7 +2847,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"ip-address@npm:^10.0.1":
+"ip-address@npm:10.1.0, ip-address@npm:^10.0.1":
   version: 10.1.0
   resolution: "ip-address@npm:10.1.0"
   checksum: 10c0/0103516cfa93f6433b3bd7333fa876eb21263912329bfa47010af5e16934eeeff86f3d2ae700a3744a137839ddfad62b900c7a445607884a49b5d1e32a3d7566
